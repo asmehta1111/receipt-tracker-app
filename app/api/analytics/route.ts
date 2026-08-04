@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllReceipts } from '@/lib/sheets';
+import { getAllReceipts, isExpense } from '@/lib/sheets';
 import { isAuthenticated } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -9,7 +9,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const receipts = await getAllReceipts();
+    const all = await getAllReceipts();
+
+    // Investment capital flows stay in the Sheet but never count as spend.
+    const receipts = all.filter(isExpense);
+    const excluded = all.filter(r => !isExpense(r));
 
     // Total spend
     const totalSpend = receipts.reduce((sum, r) => sum + (r.usdEstimate || 0), 0);
@@ -69,6 +73,10 @@ export async function GET(request: NextRequest) {
           value: Math.round((value as number) * 100) / 100,
         })),
       subscriptions: subscriptions.slice(0, 10),
+      excludedInvestments: {
+        count: excluded.length,
+        total: Math.round(excluded.reduce((s, r) => s + (r.usdEstimate || 0), 0) * 100) / 100,
+      },
     });
   } catch (err) {
     console.error('Analytics error:', err);

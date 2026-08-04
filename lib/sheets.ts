@@ -2,6 +2,15 @@ import { google, sheets_v4 } from 'googleapis';
 
 const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 
+// Capital flows for the investment business — fund subscriptions, warrant
+// subscriptions, deal payments. Real transactions, but not expenses, so they
+// are kept in the Sheet and left out of every spend total.
+export const NON_EXPENSE_CATEGORIES = ['Investments'];
+
+export function isExpense(r: { category?: string }) {
+  return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
+}
+
 function getAuth() {
   const credStr = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!credStr) throw new Error('Missing GOOGLE_SERVICE_ACCOUNT_JSON');
@@ -122,7 +131,7 @@ export async function addReceipt(receipt: any) {
       receipt.paymentMethod,
       'Manual Entry',
       receipt.subject,
-      `=IF(D${rowNum}="","",IFERROR(D${rowNum}*VLOOKUP(C${rowNum},Summary!$R$2:$S$5,2,FALSE),D${rowNum}))`,
+      `=IF($D${rowNum}="","",IFERROR($D${rowNum}*VLOOKUP($C${rowNum},Summary!$R$2:$S$30,2,FALSE),$D${rowNum}))`,
       `=IF(A${rowNum}="","",TEXT(A${rowNum},"YYYY-MM"))`,
       receipt.description || '',
     ],
