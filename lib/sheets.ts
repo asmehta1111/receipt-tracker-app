@@ -90,8 +90,8 @@ export async function updateReceipt(rowIndex: number, updates: any) {
   const sheets = await getSheets();
   const actualRow = rowIndex + 2; // +1 for header, +1 for 1-indexing
 
-  const valuesToUpdate = [];
-  const columnsToUpdate = [];
+  const valuesToUpdate: any[] = [];
+  const columnsToUpdate: number[] = [];
 
   if (updates.category !== undefined) {
     valuesToUpdate.push(updates.category);
