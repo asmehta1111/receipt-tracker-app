@@ -71,16 +71,14 @@ export async function addReceipt(receipt: any) {
   ];
 
   try {
-    const response = await sheets.spreadsheets.values.append(
-      {
-        spreadsheetId: SHEET_ID,
-        range: 'Sheet1!A:L',
-        valueInputOption: 'USER_ENTERED',
-      },
-      {
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:L',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
         values,
-      }
-    );
+      },
+    });
     return response;
   } catch (err) {
     console.error('Error adding receipt:', err);
