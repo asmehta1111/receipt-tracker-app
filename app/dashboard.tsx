@@ -1,5 +1,6 @@
 'use client';
 
+// Force rebuild
 import { useState, useEffect } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
