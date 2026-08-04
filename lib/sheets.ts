@@ -55,12 +55,26 @@ function setCellRequest(
   };
 }
 
+// Sheets can hand back a real number, or a display string like "4,080.30" / "$272.20".
+// parseFloat on the latter silently returns 4 and NaN respectively, so coerce carefully.
+function toNumber(value: any): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value == null) return 0;
+  const cleaned = String(value).replace(/[^0-9.\-]/g, '');
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export async function getAllReceipts() {
   const sheets = await getSheets();
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range: 'Sheet1!A:M',
+      // Numbers as numbers (no thousands separators or currency symbols),
+      // but dates still as "YYYY-MM-DD" rather than serial numbers.
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING',
     });
     const rows = response.data.values || [];
     if (rows.length === 0) return [];
@@ -69,14 +83,14 @@ export async function getAllReceipts() {
       date: row[0] || '',
       vendor: row[1] || '',
       currency: row[2] || '',
-      amount: parseFloat(row[3]) || 0,
+      amount: toNumber(row[3]),
       category: row[4] || '',
       isSubscription: row[5] || '',
       renewalDate: row[6] || '',
       paymentMethod: row[7] || '',
       emailAccount: row[8] || '',
       subject: row[9] || '',
-      usdEstimate: parseFloat(row[10]) || 0,
+      usdEstimate: toNumber(row[10]),
       month: row[11] || '',
       description: row[12] || '',
     }));
