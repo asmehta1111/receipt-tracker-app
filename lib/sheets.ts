@@ -1,4 +1,4 @@
-import { google } from 'googleapis';
+import { google, sheets_v4 } from 'googleapis';
 
 const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 
@@ -17,6 +17,44 @@ export async function getSheets() {
   return google.sheets({ version: 'v4', auth });
 }
 
+// Sheets wants a typed ExtendedValue, not a bare string.
+function cellValue(value: any): sheets_v4.Schema$ExtendedValue {
+  if (typeof value === 'number') return { numberValue: value };
+  if (typeof value === 'boolean') return { boolValue: value };
+  const str = value == null ? '' : String(value);
+  if (str.startsWith('=')) return { formulaValue: str };
+  return { stringValue: str };
+}
+
+async function runBatch(requests: sheets_v4.Schema$Request[]) {
+  if (requests.length === 0) return;
+  const sheets = await getSheets();
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SHEET_ID,
+    requestBody: { requests },
+  });
+}
+
+function setCellRequest(
+  rowIndex: number,
+  columnIndex: number,
+  value: any
+): sheets_v4.Schema$Request {
+  return {
+    updateCells: {
+      range: {
+        sheetId: 0,
+        startRowIndex: rowIndex,
+        endRowIndex: rowIndex + 1,
+        startColumnIndex: columnIndex,
+        endColumnIndex: columnIndex + 1,
+      },
+      rows: [{ values: [{ userEnteredValue: cellValue(value) }] }],
+      fields: 'userEnteredValue',
+    },
+  };
+}
+
 export async function getAllReceipts() {
   const sheets = await getSheets();
   try {
@@ -27,8 +65,7 @@ export async function getAllReceipts() {
     const rows = response.data.values || [];
     if (rows.length === 0) return [];
 
-    const headers = rows[0];
-    const data = rows.slice(1).map(row => ({
+    return rows.slice(1).map((row: any[]) => ({
       date: row[0] || '',
       vendor: row[1] || '',
       currency: row[2] || '',
@@ -43,8 +80,6 @@ export async function getAllReceipts() {
       month: row[11] || '',
       description: row[12] || '',
     }));
-
-    return data;
   } catch (err) {
     console.error('Error fetching receipts:', err);
     return [];
@@ -53,6 +88,14 @@ export async function getAllReceipts() {
 
 export async function addReceipt(receipt: any) {
   const sheets = await getSheets();
+
+  // Find the row this append will land on so the formulas point at themselves.
+  const existing = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: 'Sheet1!A:A',
+  });
+  const rowNum = (existing.data.values?.length || 1) + 1;
+
   const values = [
     [
       receipt.date,
@@ -65,21 +108,20 @@ export async function addReceipt(receipt: any) {
       receipt.paymentMethod,
       'Manual Entry',
       receipt.subject,
-      `=IF(D${receipt.rowNum}="","",IFERROR(D${receipt.rowNum}*VLOOKUP(C${receipt.rowNum},Summary!$R$2:$S$5,2,FALSE),D${receipt.rowNum}))`,
-      `=IF(A${receipt.rowNum}="","",TEXT(A${receipt.rowNum},"YYYY-MM"))`,
+      `=IF(D${rowNum}="","",IFERROR(D${rowNum}*VLOOKUP(C${rowNum},Summary!$R$2:$S$5,2,FALSE),D${rowNum}))`,
+      `=IF(A${rowNum}="","",TEXT(A${rowNum},"YYYY-MM"))`,
+      receipt.description || '',
     ],
   ];
 
   try {
-    const response = await sheets.spreadsheets.values.append({
+    return await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:L',
+      range: 'Sheet1!A:M',
       valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values,
-      },
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values },
     });
-    return response;
   } catch (err) {
     console.error('Error adding receipt:', err);
     throw err;
@@ -87,93 +129,31 @@ export async function addReceipt(receipt: any) {
 }
 
 export async function updateReceipt(rowIndex: number, updates: any) {
-  const sheets = await getSheets();
-  const actualRow = rowIndex + 2; // +1 for header, +1 for 1-indexing
-
-  const valuesToUpdate: any[] = [];
-  const columnsToUpdate: number[] = [];
+  const rowInSheet = rowIndex + 1; // 0-based grid index, +1 to skip the header
+  const requests: sheets_v4.Schema$Request[] = [];
 
   if (updates.category !== undefined) {
-    valuesToUpdate.push(updates.category);
-    columnsToUpdate.push(5); // Column E
+    requests.push(setCellRequest(rowInSheet, 4, updates.category)); // Column E
   }
   if (updates.isSubscription !== undefined) {
-    valuesToUpdate.push(updates.isSubscription);
-    columnsToUpdate.push(6); // Column F
+    requests.push(setCellRequest(rowInSheet, 5, updates.isSubscription)); // Column F
   }
   if (updates.paymentMethod !== undefined) {
-    valuesToUpdate.push(updates.paymentMethod);
-    columnsToUpdate.push(8); // Column H
+    requests.push(setCellRequest(rowInSheet, 7, updates.paymentMethod)); // Column H
   }
 
-  const requests = valuesToUpdate.map((value, idx) => {
-    const colLetter = String.fromCharCode(65 + columnsToUpdate[idx]); // A=65
-    return {
-      updateCells: {
-        range: {
-          sheetId: 0,
-          rowIndex: actualRow - 1,
-          columnIndex: columnsToUpdate[idx],
-          endColumnIndex: columnsToUpdate[idx] + 1,
-        },
-        rows: [
-          {
-            values: [
-              {
-                userEnteredValue: value,
-              },
-            ],
-          },
-        ],
-        fields: 'userEnteredValue',
-      },
-    };
-  });
-
-  if (requests.length > 0) {
-    try {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SHEET_ID,
-        resource: { requests },
-      });
-    } catch (err) {
-      console.error('Error updating receipt:', err);
-      throw err;
-    }
+  try {
+    await runBatch(requests);
+  } catch (err) {
+    console.error('Error updating receipt:', err);
+    throw err;
   }
 }
 
 export async function bulkUpdateCategory(rowIndices: number[], category: string) {
-  const sheets = await getSheets();
-  const requests = rowIndices.map(idx => {
-    const actualRow = idx + 2;
-    return {
-      updateCells: {
-        range: {
-          sheetId: 0,
-          rowIndex: actualRow - 1,
-          columnIndex: 4, // Column E
-          endColumnIndex: 5,
-        },
-        rows: [
-          {
-            values: [
-              {
-                userEnteredValue: category,
-              },
-            ],
-          },
-        ],
-        fields: 'userEnteredValue',
-      },
-    };
-  });
-
+  const requests = rowIndices.map(idx => setCellRequest(idx + 1, 4, category));
   try {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      resource: { requests },
-    });
+    await runBatch(requests);
   } catch (err) {
     console.error('Error bulk updating categories:', err);
     throw err;
@@ -181,26 +161,22 @@ export async function bulkUpdateCategory(rowIndices: number[], category: string)
 }
 
 export async function deleteReceipts(rowIndices: number[]) {
-  const sheets = await getSheets();
-  // Sort in descending order so row indices don't shift as we delete
-  const sortedIndices = rowIndices.sort((a, b) => b - a);
+  // Delete bottom-up so earlier indices don't shift.
+  const sorted = [...rowIndices].sort((a, b) => b - a);
 
-  const requests = sortedIndices.map(idx => ({
-    deleteRange: {
+  const requests: sheets_v4.Schema$Request[] = sorted.map(idx => ({
+    deleteDimension: {
       range: {
         sheetId: 0,
+        dimension: 'ROWS',
         startIndex: idx + 1, // +1 for header
         endIndex: idx + 2,
       },
-      shiftDimension: 'ROWS',
     },
   }));
 
   try {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      resource: { requests },
-    });
+    await runBatch(requests);
   } catch (err) {
     console.error('Error deleting receipts:', err);
     throw err;
@@ -216,38 +192,14 @@ export async function renameVendor(oldName: string, newName: string) {
     });
     const rows = response.data.values || [];
 
-    const requests = [];
+    const requests: sheets_v4.Schema$Request[] = [];
     for (let i = 1; i < rows.length; i++) {
       if (rows[i][1] === oldName) {
-        requests.push({
-          updateCells: {
-            range: {
-              sheetId: 0,
-              rowIndex: i,
-              columnIndex: 1, // Column B (Vendor)
-              endColumnIndex: 2,
-            },
-            rows: [
-              {
-                values: [
-                  {
-                    userEnteredValue: newName,
-                  },
-                ],
-              },
-            ],
-            fields: 'userEnteredValue',
-          },
-        });
+        requests.push(setCellRequest(i, 1, newName)); // Column B (Vendor)
       }
     }
 
-    if (requests.length > 0) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SHEET_ID,
-        resource: { requests },
-      });
-    }
+    await runBatch(requests);
   } catch (err) {
     console.error('Error renaming vendor:', err);
     throw err;
@@ -255,37 +207,8 @@ export async function renameVendor(oldName: string, newName: string) {
 }
 
 export async function updateDescription(rowIndex: number, description: string) {
-  const sheets = await getSheets();
-  const actualRow = rowIndex + 2; // +1 for header, +1 for 1-indexing
-
   try {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
-      resource: {
-        requests: [
-          {
-            updateCells: {
-              range: {
-                sheetId: 0,
-                rowIndex: actualRow - 1,
-                columnIndex: 12, // Column M (Description)
-                endColumnIndex: 13,
-              },
-              rows: [
-                {
-                  values: [
-                    {
-                      userEnteredValue: description,
-                    },
-                  ],
-                },
-              ],
-              fields: 'userEnteredValue',
-            },
-          },
-        ],
-      },
-    });
+    await runBatch([setCellRequest(rowIndex + 1, 12, description)]); // Column M
   } catch (err) {
     console.error('Error updating description:', err);
     throw err;
