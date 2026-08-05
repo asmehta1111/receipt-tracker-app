@@ -11,6 +11,117 @@ export function isExpense(r: { category?: string }) {
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
 }
 
+// Must stay in step with CATEGORY_KEYWORDS in receipt-scraper.js.
+export const CATEGORIES = [
+  'Airlines', 'Hotels', 'Travel', 'Transportation', 'Food', 'Groceries', 'Media',
+  'IT', 'Website', 'Telecom', 'Utilities', 'Insurance', 'Financial Services',
+  'Professional Services', 'Shopping', 'Health', 'Education', 'Clubs & Memberships',
+  'Investments', 'Real estate', 'Rent', 'Home Employees', 'Donation', 'Legal',
+  'Conference', 'Other',
+];
+
+// Categories that mean "not yet classified". "?" is a literal answer the CLI
+// review flow used to record for "I looked and still don't know".
+export const UNCLASSIFIED = ['?', 'Other', ''];
+
+// Same normalisation the scraper uses, so a decision made here matches the key
+// the scraper looks up.
+export function vendorKeyFor(vendor: string) {
+  return (vendor || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+const VENDOR_TAB = 'VendorCategories';
+
+/**
+ * Groups every unclassified row by vendor. 179 rows collapse to ~33 vendors, so
+ * the review screen asks ~33 questions instead of 179.
+ */
+export async function getReviewQueue() {
+  const receipts = await getAllReceipts();
+
+  const groups = new Map<string, {
+    vendorKey: string; vendor: string; category: string;
+    count: number; totalUsd: number; rowIndices: number[];
+    accounts: Set<string>; samples: string[]; latest: string;
+  }>();
+
+  receipts.forEach((r, i) => {
+    if (!UNCLASSIFIED.includes(r.category)) return;
+    const key = vendorKeyFor(r.vendor);
+    if (!key) return;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        vendorKey: key, vendor: r.vendor, category: r.category,
+        count: 0, totalUsd: 0, rowIndices: [], accounts: new Set(), samples: [], latest: '',
+      });
+    }
+    const g = groups.get(key)!;
+    g.count += 1;
+    g.totalUsd += r.usdEstimate || 0;
+    g.rowIndices.push(i);
+    if (r.emailAccount) g.accounts.add(r.emailAccount);
+    if (g.samples.length < 4 && r.subject) g.samples.push(r.subject);
+    if (r.date > g.latest) g.latest = r.date;
+  });
+
+  // Biggest spend first — classifying those moves the numbers most.
+  return [...groups.values()]
+    .map(g => ({ ...g, accounts: [...g.accounts] }))
+    .sort((a, b) => b.totalUsd - a.totalUsd || b.count - a.count);
+}
+
+/**
+ * Applies a category to every row of a vendor AND records the decision on the
+ * VendorCategories tab, which the scraper reads before classifying. That second
+ * part is what stops the next scrape undoing the work.
+ */
+export async function classifyVendor(vendorKey: string, category: string) {
+  const receipts = await getAllReceipts();
+  const requests: sheets_v4.Schema$Request[] = [];
+
+  receipts.forEach((r, i) => {
+    if (vendorKeyFor(r.vendor) !== vendorKey) return;
+    if (!UNCLASSIFIED.includes(r.category)) return; // never overwrite a real category
+    requests.push(setCellRequest(i + 1, 4, category)); // column E
+  });
+
+  await runBatch(requests);
+  await upsertVendorCategory(vendorKey, category);
+  return { rowsUpdated: requests.length };
+}
+
+async function upsertVendorCategory(vendorKey: string, category: string) {
+  const sheets = await getSheets();
+
+  let rows: any[][] = [];
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID, range: `${VENDOR_TAB}!A:B`,
+    });
+    rows = res.data.values || [];
+  } catch {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: VENDOR_TAB } } }] },
+    });
+    rows = [['Vendor (lowercased key)', 'Category']];
+  }
+
+  const idx = rows.findIndex((r, i) => i > 0 && vendorKeyFor(String(r[0] || '')) === vendorKey);
+  if (idx > 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID, range: `${VENDOR_TAB}!B${idx + 1}`,
+      valueInputOption: 'RAW', requestBody: { values: [[category]] },
+    });
+  } else {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID, range: `${VENDOR_TAB}!A:B`,
+      valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [[vendorKey, category]] },
+    });
+  }
+}
+
 function getAuth() {
   const credStr = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!credStr) throw new Error('Missing GOOGLE_SERVICE_ACCOUNT_JSON');

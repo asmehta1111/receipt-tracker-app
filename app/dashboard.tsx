@@ -20,10 +20,53 @@ export default function Dashboard() {
   const [renaming, setRenaming] = useState(false);
   const [descriptionModal, setDescriptionModal] = useState<{ rowIndex: number; description: string } | null>(null);
   const [savingDescription, setSavingDescription] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState<any>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [savingVendor, setSavingVendor] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState<Record<string, string>>({});
+  const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
+    fetchReviewQueue();
   }, []);
+
+  async function fetchReviewQueue() {
+    setReviewLoading(true);
+    try {
+      const res = await fetch('/api/review');
+      if (res.ok) setReviewQueue(await res.json());
+    } catch (err) {
+      console.error('Failed to load review queue:', err);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  // Applies a category to every unclassified row for this vendor and records the
+  // decision so the next scrape uses it instead of guessing again.
+  async function handleClassifyVendor(vendorKey: string, category: string) {
+    setSavingVendor(vendorKey);
+    try {
+      const res = await fetch('/api/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vendorKey, category }),
+      });
+      if (res.ok) {
+        setJustSaved(prev => ({ ...prev, [vendorKey]: category }));
+        setReviewQueue((prev: any) => ({
+          ...prev,
+          vendors: prev.vendors.filter((v: any) => v.vendorKey !== vendorKey),
+        }));
+        fetchData(); // totals and charts shift as things leave "Other"
+      }
+    } catch (err) {
+      console.error('Failed to classify vendor:', err);
+    } finally {
+      setSavingVendor(null);
+    }
+  }
 
   async function fetchData() {
     try {
@@ -184,6 +227,21 @@ export default function Dashboard() {
               }`}
             >
               Receipts
+            </button>
+            <button
+              onClick={() => { setActiveTab('review'); if (!reviewQueue) fetchReviewQueue(); }}
+              className={`py-4 px-2 border-b-2 font-medium transition flex items-center gap-2 ${
+                activeTab === 'review'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Review
+              {reviewQueue?.vendors?.length > 0 && (
+                <span className="bg-orange-500 text-white text-xs font-semibold px-2 py-0.5 rounded-full">
+                  {reviewQueue.vendors.length}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -551,6 +609,104 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'review' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold text-gray-900">Classify unsorted receipts</h2>
+              <p className="text-gray-600 mt-1">
+                Grouped by vendor, biggest spend first. Choosing a category applies it to every
+                unsorted row for that vendor and teaches the scraper, so it won&apos;t ask again.
+              </p>
+              {reviewQueue && (
+                <p className="text-sm text-gray-500 mt-3">
+                  {reviewQueue.vendors.length} vendors left
+                  {reviewQueue.vendors.length > 0 && (
+                    <> · {reviewQueue.vendors.reduce((s: number, v: any) => s + v.count, 0)} rows
+                    · ${Math.round(reviewQueue.vendors.reduce((s: number, v: any) => s + v.totalUsd, 0)).toLocaleString()}</>
+                  )}
+                </p>
+              )}
+            </div>
+
+            {reviewLoading && (
+              <div className="bg-white rounded-lg shadow p-10 text-center text-gray-500">Loading…</div>
+            )}
+
+            {reviewQueue && !reviewLoading && reviewQueue.vendors.length === 0 && (
+              <div className="bg-white rounded-lg shadow p-10 text-center">
+                <p className="text-2xl font-semibold text-gray-900">All done</p>
+                <p className="text-gray-600 mt-2">Every receipt has a real category.</p>
+              </div>
+            )}
+
+            {reviewQueue?.vendors.map((v: any) => (
+              <div key={v.vendorKey} className="bg-white rounded-lg shadow p-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-lg font-semibold text-gray-900 truncate">{v.vendor}</h3>
+                      <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                        currently &ldquo;{v.category || 'blank'}&rdquo;
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {v.count} {v.count === 1 ? 'row' : 'rows'}
+                      {' · '}${Math.round(v.totalUsd).toLocaleString()}
+                      {' · '}latest {v.latest || '—'}
+                      {' · '}{v.accounts.map((a: string) => a.split('@')[0]).join(', ')}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setExpandedVendor(expandedVendor === v.vendorKey ? null : v.vendorKey)}
+                    className="text-sm text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                  >
+                    {expandedVendor === v.vendorKey ? 'Hide' : 'Show'} example subjects
+                  </button>
+                </div>
+
+                {expandedVendor === v.vendorKey && (
+                  <ul className="mt-3 space-y-1 border-l-2 border-gray-200 pl-4">
+                    {v.samples.map((s: string, i: number) => (
+                      <li key={i} className="text-sm text-gray-600 truncate">{s}</li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {reviewQueue.categories.map((cat: string) => (
+                    <button
+                      key={cat}
+                      disabled={savingVendor === v.vendorKey}
+                      onClick={() => handleClassifyVendor(v.vendorKey, cat)}
+                      className="px-3 py-1.5 text-sm rounded-full border border-gray-300 text-gray-700
+                                 hover:border-indigo-600 hover:bg-indigo-600 hover:text-white
+                                 disabled:opacity-40 transition"
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+                {savingVendor === v.vendorKey && (
+                  <p className="text-sm text-indigo-600 mt-3">Saving…</p>
+                )}
+              </div>
+            ))}
+
+            {Object.keys(justSaved).length > 0 && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h3 className="font-semibold text-gray-900 mb-2">Classified this session</h3>
+                <ul className="space-y-1">
+                  {Object.entries(justSaved).map(([k, cat]) => (
+                    <li key={k} className="text-sm text-gray-600">
+                      <span className="text-gray-900">{k}</span> → {cat}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </main>
