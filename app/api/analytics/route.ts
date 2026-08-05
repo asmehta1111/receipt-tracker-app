@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllReceipts, isExpense } from '@/lib/sheets';
+import { getAllReceipts, isExpense, NON_EXPENSE_CATEGORIES } from '@/lib/sheets';
 import { isAuthenticated } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -38,6 +38,15 @@ export async function GET(request: NextRequest) {
       byAccount[r.emailAccount].count += 1;
     });
 
+    // By vendor — the fastest way to see what a category is actually made of
+    const byVendor: any = {};
+    receipts.forEach(r => {
+      const v = r.vendor || '(no vendor)';
+      if (!byVendor[v]) byVendor[v] = { total: 0, count: 0, category: r.category };
+      byVendor[v].total += r.usdEstimate || 0;
+      byVendor[v].count += 1;
+    });
+
     // Monthly trend
     const byMonth: any = {};
     receipts.forEach(r => {
@@ -66,6 +75,15 @@ export async function GET(request: NextRequest) {
         value: Math.round(data.total * 100) / 100,
         count: data.count,
       })),
+      byVendor: Object.entries(byVendor)
+        .map(([name, d]: any) => ({
+          name,
+          value: Math.round(d.total * 100) / 100,
+          count: d.count,
+          category: d.category,
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 40),
       monthlyTrend: Object.entries(byMonth)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([month, value]) => ({
@@ -73,6 +91,7 @@ export async function GET(request: NextRequest) {
           value: Math.round((value as number) * 100) / 100,
         })),
       subscriptions: subscriptions.slice(0, 10),
+      nonExpenseCategories: NON_EXPENSE_CATEGORIES,
       excluded: {
         count: excluded.length,
         total: Math.round(excluded.reduce((s, r) => s + (r.usdEstimate || 0), 0) * 100) / 100,

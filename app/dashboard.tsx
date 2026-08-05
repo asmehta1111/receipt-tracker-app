@@ -5,7 +5,10 @@ import { useState, useEffect } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
 
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF7C7C', '#A4DE6C', '#D084D0'];
+// Deep, high-saturation hues that stay distinguishable with red-green colour
+// vision deficiency — blue / indigo / teal / orange / rose, never two neighbours.
+const COLORS = ['#1D4ED8', '#0F766E', '#EA580C', '#BE123C', '#6D28D9', '#0369A1',
+                '#A16207', '#9F1239', '#4338CA', '#115E59'];
 
 export default function Dashboard() {
   const [receipts, setReceipts] = useState<any[]>([]);
@@ -25,11 +28,35 @@ export default function Dashboard() {
   const [savingVendor, setSavingVendor] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState<Record<string, string>>({});
   const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
+  const [openCats, setOpenCats] = useState<Set<string>>(new Set());
+  const [openVendors, setOpenVendors] = useState<Set<string>>(new Set());
+  const [breakdownScope, setBreakdownScope] = useState<'expenses' | 'excluded' | 'all'>('expenses');
+
+  const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
+    const next = new Set(set);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setter(next);
+  };
 
   useEffect(() => {
     fetchData();
     fetchReviewQueue();
   }, []);
+
+  // Clicking anything on the dashboard should show the rows behind the number.
+  function drillIntoCategory(category: string) {
+    setFilterCategory(category);
+    setSearchQuery('');
+    setActiveTab('receipts');
+    window.scrollTo({ top: 0 });
+  }
+
+  function drillIntoVendor(vendor: string) {
+    setFilterCategory('');
+    setSearchQuery(vendor);
+    setActiveTab('receipts');
+    window.scrollTo({ top: 0 });
+  }
 
   async function fetchReviewQueue() {
     setReviewLoading(true);
@@ -177,6 +204,44 @@ export default function Dashboard() {
 
   const categories = [...new Set(receipts.map(r => r.category).filter(Boolean))];
 
+  // Category -> vendor -> receipts, computed client-side so drilling is instant.
+  const nonExpense: string[] = analytics?.nonExpenseCategories || [];
+  const breakdown = (() => {
+    const scoped = receipts.filter(r => {
+      const excluded = nonExpense.includes(r.category);
+      return breakdownScope === 'all' ? true : breakdownScope === 'excluded' ? excluded : !excluded;
+    });
+    const total = scoped.reduce((s, r) => s + (r.usdEstimate || 0), 0);
+
+    const cats = new Map<string, any>();
+    for (const r of scoped) {
+      const cat = r.category || '(uncategorised)';
+      if (!cats.has(cat)) cats.set(cat, { name: cat, total: 0, count: 0, vendors: new Map() });
+      const c = cats.get(cat);
+      c.total += r.usdEstimate || 0;
+      c.count += 1;
+
+      const vendor = r.vendor || '(no vendor)';
+      if (!c.vendors.has(vendor)) c.vendors.set(vendor, { name: vendor, total: 0, count: 0, rows: [] });
+      const v = c.vendors.get(vendor);
+      v.total += r.usdEstimate || 0;
+      v.count += 1;
+      v.rows.push(r);
+    }
+
+    return {
+      total,
+      categories: [...cats.values()]
+        .map(c => ({
+          ...c,
+          vendors: [...c.vendors.values()]
+            .map((v: any) => ({ ...v, rows: v.rows.sort((a: any, b: any) => (b.usdEstimate || 0) - (a.usdEstimate || 0)) }))
+            .sort((a: any, b: any) => b.total - a.total),
+        }))
+        .sort((a, b) => b.total - a.total),
+    };
+  })();
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
@@ -229,6 +294,16 @@ export default function Dashboard() {
               Receipts
             </button>
             <button
+              onClick={() => setActiveTab('breakdown')}
+              className={`py-4 px-2 border-b-2 font-medium transition ${
+                activeTab === 'breakdown'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Breakdown
+            </button>
+            <button
               onClick={() => { setActiveTab('review'); if (!reviewQueue) fetchReviewQueue(); }}
               className={`py-4 px-2 border-b-2 font-medium transition flex items-center gap-2 ${
                 activeTab === 'review'
@@ -263,9 +338,13 @@ export default function Dashboard() {
                       (${Math.round(analytics.excluded.total).toLocaleString()}) —
                     </p>
                     {analytics.excluded.byCategory.map((c: any) => (
-                      <p key={c.name} className="pl-2">
+                      <button
+                        key={c.name}
+                        onClick={() => drillIntoCategory(c.name)}
+                        className="block pl-2 text-left hover:text-indigo-600 hover:underline"
+                      >
                         {c.name}: {c.count} rows, ${Math.round(c.total).toLocaleString()}
-                      </p>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -286,6 +365,61 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Where the money went — click any row to see the receipts behind it */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-lg font-semibold text-gray-900">Where the money went</h2>
+                <p className="text-sm text-gray-500 mb-4">Click a category to see its receipts</p>
+                <div className="divide-y">
+                  {[...analytics.byCategory].sort((a: any, b: any) => b.value - a.value).map((c: any) => {
+                    const pct = analytics.totalSpend > 0 ? (c.value / analytics.totalSpend) * 100 : 0;
+                    return (
+                      <button
+                        key={c.name}
+                        onClick={() => drillIntoCategory(c.name)}
+                        className="w-full py-2 text-left hover:bg-gray-50 group"
+                      >
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="font-medium text-gray-900 group-hover:text-indigo-600 truncate">
+                            {c.name || '(uncategorised)'}
+                          </span>
+                          <span className="text-sm text-gray-500 whitespace-nowrap">
+                            {c.count} · {pct.toFixed(1)}%
+                          </span>
+                          <span className="font-semibold text-gray-900 whitespace-nowrap w-28 text-right">
+                            ${Math.round(c.value).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 rounded mt-1 overflow-hidden">
+                          <div className="h-full bg-indigo-600 rounded" style={{ width: `${Math.min(100, pct)}%` }} />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-lg font-semibold text-gray-900">Biggest vendors</h2>
+                <p className="text-sm text-gray-500 mb-4">Click a vendor to see its receipts</p>
+                <div className="divide-y max-h-[520px] overflow-y-auto">
+                  {analytics.byVendor?.map((v: any) => (
+                    <button
+                      key={v.name}
+                      onClick={() => drillIntoVendor(v.name)}
+                      className="w-full py-2 text-left hover:bg-gray-50 group flex items-baseline justify-between gap-3"
+                    >
+                      <span className="font-medium text-gray-900 group-hover:text-indigo-600 truncate">{v.name}</span>
+                      <span className="text-sm text-gray-500 whitespace-nowrap">{v.count}</span>
+                      <span className="font-semibold text-gray-900 whitespace-nowrap w-28 text-right">
+                        ${Math.round(v.value).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Category Pie Chart */}
@@ -301,6 +435,8 @@ export default function Dashboard() {
                       cy="50%"
                       outerRadius={100}
                       label
+                      onClick={(d: any) => d?.name && drillIntoCategory(d.name)}
+                      className="cursor-pointer"
                     >
                       {analytics.byCategory.map((entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -373,6 +509,28 @@ export default function Dashboard() {
 
         {activeTab === 'receipts' && (
           <div className="space-y-4">
+            {/* Active filter banner — makes it obvious you arrived here from a
+                dashboard click, and how to get back to everything. */}
+            {(filterCategory || searchQuery) && (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3">
+                <span className="text-sm text-indigo-900">
+                  Showing <strong>{filteredReceipts.length}</strong> of {receipts.length} receipts
+                  {filterCategory && <> in <strong>{filterCategory}</strong></>}
+                  {searchQuery && <> matching <strong>&ldquo;{searchQuery}&rdquo;</strong></>}
+                  {' · '}
+                  <strong>
+                    ${Math.round(filteredReceipts.reduce((s, r) => s + (r.usdEstimate || 0), 0)).toLocaleString()}
+                  </strong>
+                </span>
+                <button
+                  onClick={() => { setFilterCategory(''); setSearchQuery(''); }}
+                  className="ml-auto text-sm text-indigo-700 hover:text-indigo-900 underline"
+                >
+                  Clear filter
+                </button>
+              </div>
+            )}
+
             {/* Description Modal */}
             {descriptionModal !== null && (
               <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -616,6 +774,127 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'breakdown' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">Breakdown</h2>
+                  <p className="text-gray-600 text-sm mt-1">
+                    Click a category to see its vendors, then a vendor to see every receipt.
+                  </p>
+                </div>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                  {([
+                    ['expenses', 'Expenses'],
+                    ['excluded', 'Excluded'],
+                    ['all', 'Everything'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setBreakdownScope(key)}
+                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                        breakdownScope === key ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-3xl font-bold text-gray-900 mt-4">
+                ${Math.round(breakdown.total).toLocaleString()}
+              </p>
+              <p className="text-sm text-gray-500">
+                {breakdown.categories.reduce((s, c) => s + c.count, 0)} receipts across{' '}
+                {breakdown.categories.length} categories
+              </p>
+            </div>
+
+            {breakdown.categories.map((cat: any) => {
+              const catPct = breakdown.total > 0 ? (cat.total / breakdown.total) * 100 : 0;
+              const catOpen = openCats.has(cat.name);
+              return (
+                <div key={cat.name} className="bg-white rounded-lg shadow overflow-hidden">
+                  <button
+                    onClick={() => toggle(openCats, cat.name, setOpenCats)}
+                    className="w-full px-6 py-4 text-left hover:bg-gray-50"
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="font-semibold text-gray-900">
+                        <span className="inline-block w-4 text-gray-400">{catOpen ? '▾' : '▸'}</span>
+                        {cat.name}
+                      </span>
+                      <span className="text-sm text-gray-500 whitespace-nowrap">
+                        {cat.count} receipts · {cat.vendors.length} vendors · {catPct.toFixed(1)}%
+                      </span>
+                      <span className="font-bold text-gray-900 w-32 text-right whitespace-nowrap">
+                        ${Math.round(cat.total).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded mt-2 overflow-hidden">
+                      <div className="h-full bg-indigo-600 rounded" style={{ width: `${Math.min(100, catPct)}%` }} />
+                    </div>
+                  </button>
+
+                  {catOpen && (
+                    <div className="border-t bg-gray-50 px-6 py-2">
+                      {cat.vendors.map((v: any) => {
+                        const vKey = `${cat.name}|${v.name}`;
+                        const vOpen = openVendors.has(vKey);
+                        const vPct = cat.total > 0 ? (v.total / cat.total) * 100 : 0;
+                        return (
+                          <div key={vKey} className="border-b last:border-b-0 border-gray-200">
+                            <button
+                              onClick={() => toggle(openVendors, vKey, setOpenVendors)}
+                              className="w-full py-2 text-left hover:bg-gray-100 flex items-baseline justify-between gap-3"
+                            >
+                              <span className="text-gray-900 truncate">
+                                <span className="inline-block w-4 text-gray-400">{vOpen ? '▾' : '▸'}</span>
+                                {v.name}
+                              </span>
+                              <span className="text-xs text-gray-500 whitespace-nowrap">
+                                {v.count} · {vPct.toFixed(0)}% of {cat.name}
+                              </span>
+                              <span className="font-semibold text-gray-900 w-28 text-right whitespace-nowrap">
+                                ${Math.round(v.total).toLocaleString()}
+                              </span>
+                            </button>
+
+                            {vOpen && (
+                              <div className="pb-2 pl-6">
+                                <table className="w-full text-sm">
+                                  <tbody>
+                                    {v.rows.map((r: any, i: number) => (
+                                      <tr key={i} className="border-t border-gray-100">
+                                        <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap w-24">{r.date}</td>
+                                        <td className="py-1.5 pr-3 text-gray-700">{r.subject}</td>
+                                        <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap w-32">
+                                          {r.emailAccount?.split('@')[0]}
+                                        </td>
+                                        <td className="py-1.5 text-right text-gray-900 whitespace-nowrap w-28">
+                                          {r.currency} {r.amount?.toLocaleString()}
+                                          {r.currency !== 'USD' && (
+                                            <span className="text-gray-400"> (${Math.round(r.usdEstimate).toLocaleString()})</span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

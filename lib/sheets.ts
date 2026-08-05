@@ -10,7 +10,13 @@ const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 //                       double-counts (~$470k on Amex alone).
 //   Internal Transfers— money between ASM's own entities (Azlin / AM Advisors /
 //                       BLIF), not money leaving for a third party.
-export const NON_EXPENSE_CATEGORIES = ['Investments', 'Card Payments', 'Internal Transfers'];
+//   Business (BLIF/AMA) — anything belonging to the fund (BLIF / MFLP / its
+//                       investors and administrators) or the advisory firm
+//                       (AM Advisors). ASM: "no blif expenses should be here.
+//                       nor should any am advisors ones".
+export const NON_EXPENSE_CATEGORIES = [
+  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
+];
 
 export function isExpense(r: { category?: string }) {
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
@@ -21,7 +27,7 @@ export const CATEGORIES = [
   'Airlines', 'Hotels', 'Travel', 'Transportation', 'Food', 'Groceries', 'Media',
   'IT', 'Website', 'Telecom', 'Utilities', 'Insurance', 'Financial Services',
   'Professional Services', 'Shopping', 'Health', 'Education', 'Clubs & Memberships',
-  'Investments', 'Card Payments', 'Internal Transfers',
+  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
   'Real estate', 'Rent', 'Home Employees', 'Donation', 'Legal',
   'Conference', 'Other',
 ];
