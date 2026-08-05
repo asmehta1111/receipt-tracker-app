@@ -2,10 +2,15 @@ import { google, sheets_v4 } from 'googleapis';
 
 const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 
-// Capital flows for the investment business — fund subscriptions, warrant
-// subscriptions, deal payments. Real transactions, but not expenses, so they
-// are kept in the Sheet and left out of every spend total.
-export const NON_EXPENSE_CATEGORIES = ['Investments'];
+// Real transactions that are NOT spend. Kept in the Sheet and visible in the
+// table, but excluded from every total and chart:
+//   Investments       — fund subscriptions, warrants, deal payments
+//   Card Payments     — paying off a credit card. The purchases on that card are
+//                       already captured individually, so counting these too
+//                       double-counts (~$470k on Amex alone).
+//   Internal Transfers— money between ASM's own entities (Azlin / AM Advisors /
+//                       BLIF), not money leaving for a third party.
+export const NON_EXPENSE_CATEGORIES = ['Investments', 'Card Payments', 'Internal Transfers'];
 
 export function isExpense(r: { category?: string }) {
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
@@ -16,7 +21,8 @@ export const CATEGORIES = [
   'Airlines', 'Hotels', 'Travel', 'Transportation', 'Food', 'Groceries', 'Media',
   'IT', 'Website', 'Telecom', 'Utilities', 'Insurance', 'Financial Services',
   'Professional Services', 'Shopping', 'Health', 'Education', 'Clubs & Memberships',
-  'Investments', 'Real estate', 'Rent', 'Home Employees', 'Donation', 'Legal',
+  'Investments', 'Card Payments', 'Internal Transfers',
+  'Real estate', 'Rent', 'Home Employees', 'Donation', 'Legal',
   'Conference', 'Other',
 ];
 

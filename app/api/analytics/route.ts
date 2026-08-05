@@ -73,9 +73,20 @@ export async function GET(request: NextRequest) {
           value: Math.round((value as number) * 100) / 100,
         })),
       subscriptions: subscriptions.slice(0, 10),
-      excludedInvestments: {
+      excluded: {
         count: excluded.length,
         total: Math.round(excluded.reduce((s, r) => s + (r.usdEstimate || 0), 0) * 100) / 100,
+        byCategory: Object.entries(
+          excluded.reduce((acc: any, r) => {
+            const c = r.category || 'Other';
+            if (!acc[c]) acc[c] = { count: 0, total: 0 };
+            acc[c].count += 1;
+            acc[c].total += r.usdEstimate || 0;
+            return acc;
+          }, {})
+        )
+          .map(([name, d]: any) => ({ name, count: d.count, total: Math.round(d.total * 100) / 100 }))
+          .sort((a, b) => b.total - a.total),
       },
     });
   } catch (err) {

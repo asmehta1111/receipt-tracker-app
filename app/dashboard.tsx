@@ -256,11 +256,18 @@ export default function Dashboard() {
               <div className="bg-white rounded-lg shadow p-6">
                 <p className="text-gray-600 text-sm font-medium">Total Spend (USD)</p>
                 <p className="text-3xl font-bold text-gray-900">${analytics.totalSpend.toLocaleString()}</p>
-                {analytics.excludedInvestments?.count > 0 && (
-                  <p className="text-xs text-gray-500 mt-1">
-                    excludes {analytics.excludedInvestments.count} investment rows
-                    (${analytics.excludedInvestments.total.toLocaleString()})
-                  </p>
+                {analytics.excluded?.count > 0 && (
+                  <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+                    <p>
+                      excludes {analytics.excluded.count} rows
+                      (${Math.round(analytics.excluded.total).toLocaleString()}) —
+                    </p>
+                    {analytics.excluded.byCategory.map((c: any) => (
+                      <p key={c.name} className="pl-2">
+                        {c.name}: {c.count} rows, ${Math.round(c.total).toLocaleString()}
+                      </p>
+                    ))}
+                  </div>
                 )}
               </div>
               <div className="bg-white rounded-lg shadow p-6">
