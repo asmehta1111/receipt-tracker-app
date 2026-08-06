@@ -31,6 +31,10 @@ export default function Dashboard() {
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [openVendors, setOpenVendors] = useState<Set<string>>(new Set());
   const [breakdownScope, setBreakdownScope] = useState<'expenses' | 'excluded' | 'all'>('expenses');
+  const [duplicates, setDuplicates] = useState<any>(null);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [mergingKey, setMergingKey] = useState<string | null>(null);
+  const [dismissedGroups, setDismissedGroups] = useState<Set<string>>(new Set());
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -56,6 +60,41 @@ export default function Dashboard() {
     setSearchQuery(vendor);
     setActiveTab('receipts');
     window.scrollTo({ top: 0 });
+  }
+
+  async function fetchDuplicates() {
+    setDupLoading(true);
+    try {
+      const res = await fetch('/api/duplicates');
+      if (res.ok) setDuplicates(await res.json());
+    } catch (err) {
+      console.error('Failed to load duplicates:', err);
+    } finally {
+      setDupLoading(false);
+    }
+  }
+
+  // Keeps the first row of a group and deletes the rest.
+  async function handleMergeGroup(group: any) {
+    setMergingKey(group.key);
+    try {
+      const toDelete = group.rows.slice(1).map((r: any) => r.rowIndex);
+      const res = await fetch('/api/duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rowIndices: toDelete }),
+      });
+      if (res.ok) {
+        setDismissedGroups(prev => new Set(prev).add(group.key));
+        fetchData();
+        // Row indices shift after a delete, so the list must be rebuilt.
+        fetchDuplicates();
+      }
+    } catch (err) {
+      console.error('Failed to merge:', err);
+    } finally {
+      setMergingKey(null);
+    }
   }
 
   async function fetchReviewQueue() {
@@ -302,6 +341,21 @@ export default function Dashboard() {
               }`}
             >
               Breakdown
+            </button>
+            <button
+              onClick={() => { setActiveTab('duplicates'); if (!duplicates) fetchDuplicates(); }}
+              className={`py-4 px-2 border-b-2 font-medium transition flex items-center gap-2 ${
+                activeTab === 'duplicates'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Duplicates
+              {duplicates?.totalGroups > 0 && (
+                <span className="bg-rose-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full">
+                  {duplicates.groups.filter((g: any) => !dismissedGroups.has(g.key)).length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => { setActiveTab('review'); if (!reviewQueue) fetchReviewQueue(); }}
@@ -774,6 +828,93 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'duplicates' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold text-gray-900">Suspected duplicates</h2>
+              <p className="text-gray-600 mt-1">
+                Same amount, same vendor or same subject. Nothing is deleted until you say so —
+                <strong> Merge</strong> keeps the top row and removes the rest.
+              </p>
+              {duplicates && (
+                <p className="text-sm text-gray-500 mt-3">
+                  {duplicates.groups.filter((g: any) => !dismissedGroups.has(g.key)).length} groups
+                  {' · '}${Math.round(duplicates.totalWasted).toLocaleString()} of double-counting if all are real
+                </p>
+              )}
+            </div>
+
+            {dupLoading && (
+              <div className="bg-white rounded-lg shadow p-10 text-center text-gray-500">Loading…</div>
+            )}
+
+            {duplicates && !dupLoading &&
+              duplicates.groups.filter((g: any) => !dismissedGroups.has(g.key)).length === 0 && (
+              <div className="bg-white rounded-lg shadow p-10 text-center">
+                <p className="text-2xl font-semibold text-gray-900">Nothing left to review</p>
+              </div>
+            )}
+
+            {duplicates?.groups.filter((g: any) => !dismissedGroups.has(g.key)).map((g: any) => (
+              <div key={g.key} className="bg-white rounded-lg shadow p-6">
+                <div className="flex flex-wrap items-start justify-between gap-4 mb-3">
+                  <div>
+                    <span className="text-lg font-semibold text-gray-900">
+                      {g.currency} {g.amount?.toLocaleString()}
+                    </span>
+                    <span className="text-gray-500"> × {g.rows.length} rows</span>
+                    <p className="text-sm text-gray-500">
+                      ${Math.round(g.wastedUsd).toLocaleString()} counted more than once if these are the same
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setDismissedGroups(prev => new Set(prev).add(g.key))}
+                      className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                    >
+                      Keep both
+                    </button>
+                    <button
+                      onClick={() => handleMergeGroup(g)}
+                      disabled={mergingKey === g.key}
+                      className="px-3 py-1.5 text-sm bg-rose-600 text-white rounded-lg font-medium hover:bg-rose-700 disabled:bg-gray-400"
+                    >
+                      {mergingKey === g.key ? 'Merging…' : `Merge (keep 1, delete ${g.rows.length - 1})`}
+                    </button>
+                  </div>
+                </div>
+
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b">
+                      <th className="pb-2 font-medium w-8"></th>
+                      <th className="pb-2 font-medium w-28">Date</th>
+                      <th className="pb-2 font-medium">Vendor</th>
+                      <th className="pb-2 font-medium">Subject</th>
+                      <th className="pb-2 font-medium w-36">Category</th>
+                      <th className="pb-2 font-medium w-32">Mailbox</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.rows.map((r: any, i: number) => (
+                      <tr key={i} className={`border-b last:border-b-0 ${i === 0 ? 'bg-green-50' : ''}`}>
+                        <td className="py-2 text-xs font-medium text-gray-500">
+                          {i === 0 ? 'KEEP' : 'del'}
+                        </td>
+                        <td className="py-2 text-gray-600">{r.date}</td>
+                        <td className="py-2 text-gray-900">{r.vendor}</td>
+                        <td className="py-2 text-gray-600">{r.subject}</td>
+                        <td className="py-2 text-gray-600">{r.category}</td>
+                        <td className="py-2 text-gray-500">{r.emailAccount?.split('@')[0]}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
           </div>
         )}
 

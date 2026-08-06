@@ -44,6 +44,66 @@ export function vendorKeyFor(vendor: string) {
 
 const VENDOR_TAB = 'VendorCategories';
 
+const normalizeSubject = (s: string) => String(s || '')
+  .replace(/^(\s*(re|fwd?|fw)\s*:\s*|\s*\{external\}\s*)+/gi, '')
+  .replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Candidate duplicate groups, for human judgement rather than automatic merging.
+ * Two rows are candidates when the amount is identical AND either the normalised
+ * subject matches or they share the vendor. Deliberately loose — the point is to
+ * surface things for review, not to decide.
+ */
+export async function getDuplicateGroups() {
+  const receipts = await getAllReceipts();
+
+  const buckets = new Map<string, any[]>();
+  receipts.forEach((r, i) => {
+    if (!r.amount) return;
+    const key = `${r.amount}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push({ ...r, rowIndex: i });
+  });
+
+  const groups: any[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.length < 2) continue;
+
+    // Within an amount bucket, cluster by subject or vendor.
+    const used = new Set<number>();
+    for (let i = 0; i < bucket.length; i++) {
+      if (used.has(i)) continue;
+      const cluster = [bucket[i]];
+      used.add(i);
+      for (let j = i + 1; j < bucket.length; j++) {
+        if (used.has(j)) continue;
+        const a = bucket[i], b = bucket[j];
+        const sameSubject = normalizeSubject(a.subject) === normalizeSubject(b.subject);
+        const sameVendor = (a.vendor || '').toLowerCase() === (b.vendor || '').toLowerCase();
+        if (sameSubject || sameVendor) { cluster.push(b); used.add(j); }
+      }
+      if (cluster.length > 1) {
+        groups.push({
+          key: `${cluster[0].amount}|${normalizeSubject(cluster[0].subject)}`,
+          amount: cluster[0].amount,
+          currency: cluster[0].currency,
+          usdEach: cluster[0].usdEstimate,
+          wastedUsd: cluster.slice(1).reduce((s: number, r: any) => s + (r.usdEstimate || 0), 0),
+          rows: cluster.sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '')),
+        });
+      }
+    }
+  }
+
+  return groups.sort((a, b) => b.wastedUsd - a.wastedUsd);
+}
+
+/** Deletes the given sheet rows (0-based data indices), bottom-up. */
+export async function mergeDuplicates(rowIndices: number[]) {
+  await deleteReceipts(rowIndices);
+  return { deleted: rowIndices.length };
+}
+
 /**
  * Groups every unclassified row by vendor. 179 rows collapse to ~33 vendors, so
  * the review screen asks ~33 questions instead of 179.
