@@ -14,8 +14,11 @@ const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 //                       investors and administrators) or the advisory firm
 //                       (AM Advisors). ASM: "no blif expenses should be here.
 //                       nor should any am advisors ones".
+//   Real estate       — property purchases (the Godrej unit). Money out, but
+//                       buying an asset, not spending. ASM: "take out godrej
+//                       real estate transactions".
 export const NON_EXPENSE_CATEGORIES = [
-  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
+  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)', 'Real estate',
 ];
 
 export function isExpense(r: { category?: string }) {
