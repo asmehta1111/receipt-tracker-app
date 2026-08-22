@@ -519,12 +519,20 @@ export async function getCardCharges(): Promise<CardCharge[]> {
 }
 
 /**
- * Matches statement charges to receipts on amount, within a date window.
- * Each side is consumed once, so a recurring charge doesn't match the same
- * receipt repeatedly. Statement dates lag the transaction by a day or two, and
- * the tracker's dates are email dates, so the window has to be generous.
+ * Matches statement charges to receipts.
+ *
+ * Two passes, because an exact-amount rule badly under-matches foreign spend:
+ * Amex converts an INR charge at their rate on their date, while the tracker
+ * converts at GOOGLEFINANCE's rate, so the same purchase differs by a few
+ * percent and never matches on the cent.
+ *
+ *   pass 1 — exact to the cent (USD-billed purchases)
+ *   pass 2 — percentage tolerance, only for receipts in a foreign currency
+ *
+ * Exact wins first so a fuzzy candidate can never steal a clean match, and each
+ * side is consumed once so a recurring charge doesn't match one receipt twice.
  */
-export async function reconcileCharges(windowDays = 5) {
+export async function reconcileCharges(windowDays = 5, fxTolerance = 0.06) {
   const [receipts, charges] = await Promise.all([getAllReceipts(), getCardCharges()]);
   const spendable = receipts
     .map((r, i) => ({ ...r, idx: i }))
@@ -533,15 +541,38 @@ export async function reconcileCharges(windowDays = 5) {
   const day = (s: string) => { const t = Date.parse(s); return Number.isFinite(t) ? t / 86400000 : null; };
   const usedReceipt = new Set<number>();
   const matched: any[] = [];
-  const chargesNoReceipt: any[] = [];
 
-  for (const c of charges) {
+  // Statement credits are refunds and card payments, not spending.
+  const debits = charges.filter(c => c.amount > 0);
+
+  const inWindow = (r: any, cd: number | null, days: number) => {
+    const rd = day(r.date);
+    return cd !== null && rd !== null && Math.abs(rd - cd) <= days;
+  };
+
+  const remaining: typeof debits = [];
+  for (const c of debits) {
     const cd = day(c.date);
     const hit = spendable
-      .filter(r => !usedReceipt.has(r.idx) && Math.abs((r.usdEstimate || 0) - Math.abs(c.amount)) < 0.02)
-      .filter(r => { const rd = day(r.date); return cd !== null && rd !== null && Math.abs(rd - cd) <= windowDays; })
+      .filter(r => !usedReceipt.has(r.idx) && Math.abs((r.usdEstimate || 0) - c.amount) < 0.02)
+      .filter(r => inWindow(r, cd, windowDays))
       .sort((a, b) => Math.abs(day(a.date)! - cd!) - Math.abs(day(b.date)! - cd!))[0];
-    if (hit) { usedReceipt.add(hit.idx); matched.push({ charge: c, receipt: hit }); }
+    if (hit) { usedReceipt.add(hit.idx); matched.push({ charge: c, receipt: hit, how: 'exact' }); }
+    else remaining.push(c);
+  }
+
+  const chargesNoReceipt: any[] = [];
+  for (const c of remaining) {
+    const cd = day(c.date);
+    const hit = spendable
+      .filter(r => !usedReceipt.has(r.idx))
+      // Only foreign-currency receipts get the tolerance; a USD receipt that is
+      // 5% off is a different purchase, not an exchange-rate artefact.
+      .filter(r => (r.currency || 'USD') !== 'USD')
+      .filter(r => Math.abs((r.usdEstimate || 0) - c.amount) / c.amount <= fxTolerance)
+      .filter(r => inWindow(r, cd, windowDays + 3))
+      .sort((a, b) => Math.abs((a.usdEstimate || 0) - c.amount) - Math.abs((b.usdEstimate || 0) - c.amount))[0];
+    if (hit) { usedReceipt.add(hit.idx); matched.push({ charge: c, receipt: hit, how: 'fx' }); }
     else chargesNoReceipt.push(c);
   }
 
@@ -550,17 +581,21 @@ export async function reconcileCharges(windowDays = 5) {
 
   return {
     windowDays,
+    fxTolerance,
     totals: {
-      charges: charges.length,
-      chargeValue: sum(charges, c => Math.abs(c.amount)),
+      charges: debits.length,
+      chargeValue: sum(debits, c => c.amount),
       matched: matched.length,
-      matchedValue: sum(matched, m => Math.abs(m.charge.amount)),
+      matchedValue: sum(matched, m => m.charge.amount),
+      matchedExact: matched.filter(m => m.how === 'exact').length,
+      matchedFx: matched.filter(m => m.how === 'fx').length,
+      credits: charges.length - debits.length,
       chargesNoReceipt: chargesNoReceipt.length,
-      chargesNoReceiptValue: sum(chargesNoReceipt, c => Math.abs(c.amount)),
+      chargesNoReceiptValue: sum(chargesNoReceipt, c => c.amount),
       receiptsNoCharge: receiptsNoCharge.length,
       receiptsNoChargeValue: sum(receiptsNoCharge, r => r.usdEstimate || 0),
     },
-    chargesNoReceipt: chargesNoReceipt.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 200),
+    chargesNoReceipt: chargesNoReceipt.sort((a, b) => b.amount - a.amount).slice(0, 200),
     receiptsNoCharge: receiptsNoCharge.sort((a, b) => (b.usdEstimate || 0) - (a.usdEstimate || 0)).slice(0, 200),
     matched: matched.slice(0, 50),
   };

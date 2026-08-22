@@ -1404,14 +1404,16 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-1 mt-5 bg-gray-200 border border-gray-200 rounded overflow-hidden">
                   {[
                     ['Charges on statement', reconcile.totals.charges, reconcile.totals.chargeValue, ''],
-                    ['Matched to a receipt', reconcile.totals.matched, reconcile.totals.matchedValue, 'text-teal-700'],
+                    ['Matched to a receipt', reconcile.totals.matched, reconcile.totals.matchedValue, 'text-teal-700',
+                      `${reconcile.totals.matchedExact} exact · ${reconcile.totals.matchedFx} via FX tolerance`],
                     ['Charged, no receipt', reconcile.totals.chargesNoReceipt, reconcile.totals.chargesNoReceiptValue, 'text-rose-700'],
                     ['Receipt, no charge', reconcile.totals.receiptsNoCharge, reconcile.totals.receiptsNoChargeValue, 'text-amber-700'],
-                  ].map(([label, n, v, cls]: any) => (
+                  ].map(([label, n, v, cls, note]: any) => (
                     <div key={label} className="bg-white p-3">
                       <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold">{label}</div>
                       <div className={`text-xl font-bold tabular-nums ${cls}`}>${Math.round(v).toLocaleString()}</div>
                       <div className="text-xs text-gray-500">{n} rows</div>
+                      {note && <div className="text-[11px] text-gray-400 mt-0.5">{note}</div>}
                     </div>
                   ))}
                 </div>
@@ -1439,8 +1441,8 @@ export default function Dashboard() {
 
                 <p className="text-sm text-gray-500 mb-3">
                   {reconcileSide === 'chargesNoReceipt'
-                    ? 'Real money left your card and no receipt email was found — spending the tracker is missing entirely.'
-                    : 'A receipt exists but no matching card charge — paid another way, never actually billed, or already cancelled.'}
+                    ? `Real money left your card and no receipt email was found — spending the tracker is missing entirely. Foreign-currency charges are matched within ${Math.round((reconcile.fxTolerance || 0.06) * 100)}%, since Amex and the tracker convert at different rates.`
+                    : 'A receipt exists but no matching charge on this card — paid another way, on a different card, or never actually billed.'}
                 </p>
 
                 <div className="overflow-x-auto">
