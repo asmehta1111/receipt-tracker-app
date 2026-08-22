@@ -95,12 +95,18 @@ export async function GET(request: NextRequest) {
       excluded: {
         count: excluded.length,
         total: Math.round(excluded.reduce((s, r) => s + (r.usdEstimate || 0), 0) * 100) / 100,
+        // Grouped by WHY it was excluded, not by its category. Grouping by
+        // category produced a 26-line list — a refunded flight showed up as
+        // "Airlines", a voided food order as "Food" — which told you nothing
+        // and swamped the card.
         byCategory: Object.entries(
           excluded.reduce((acc: any, r) => {
-            const c = r.category || 'Other';
-            if (!acc[c]) acc[c] = { count: 0, total: 0 };
-            acc[c].count += 1;
-            acc[c].total += r.usdEstimate || 0;
+            const reason = NON_EXPENSE_CATEGORIES.includes(r.category)
+              ? r.category
+              : `${r.status || 'Excluded'}`;
+            if (!acc[reason]) acc[reason] = { count: 0, total: 0 };
+            acc[reason].count += 1;
+            acc[reason].total += r.usdEstimate || 0;
             return acc;
           }, {})
         )

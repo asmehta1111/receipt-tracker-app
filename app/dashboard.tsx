@@ -37,6 +37,7 @@ export default function Dashboard() {
   const [dismissedGroups, setDismissedGroups] = useState<Set<string>>(new Set());
   const [filterYear, setFilterYear] = useState('');
   const [breakdownYear, setBreakdownYear] = useState('');
+  const [showExcluded, setShowExcluded] = useState(false);
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -428,21 +429,14 @@ export default function Dashboard() {
                 <p className="text-gray-600 text-sm font-medium">Total Spend (USD)</p>
                 <p className="text-3xl font-bold text-gray-900">${analytics.totalSpend.toLocaleString()}</p>
                 {analytics.excluded?.count > 0 && (
-                  <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                    <p>
-                      excludes {analytics.excluded.count} rows
-                      (${Math.round(analytics.excluded.total).toLocaleString()}) —
-                    </p>
-                    {analytics.excluded.byCategory.map((c: any) => (
-                      <button
-                        key={c.name}
-                        onClick={() => drillIntoCategory(c.name)}
-                        className="block pl-2 text-left hover:text-indigo-600 hover:underline"
-                      >
-                        {c.name}: {c.count} rows, ${Math.round(c.total).toLocaleString()}
-                      </button>
-                    ))}
-                  </div>
+                  <button
+                    onClick={() => setShowExcluded(v => !v)}
+                    className="text-xs text-gray-500 mt-1 hover:text-indigo-600 text-left"
+                  >
+                    excludes {analytics.excluded.count} rows
+                    (${Math.round(analytics.excluded.total).toLocaleString()})
+                    <span className="ml-1 text-indigo-600">{showExcluded ? 'hide' : 'show'}</span>
+                  </button>
                 )}
               </div>
               <div className="bg-white rounded-lg shadow p-6">
@@ -460,6 +454,42 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
+
+            {/* What's held out of the total, and why. Kept out of the KPI grid —
+                inline it swamped the Total Spend card. */}
+            {showExcluded && analytics.excluded?.count > 0 && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex items-baseline justify-between gap-4 mb-1">
+                  <h2 className="text-lg font-semibold text-gray-900">Not counted as spend</h2>
+                  <button
+                    onClick={() => setShowExcluded(false)}
+                    className="text-sm text-indigo-600 hover:text-indigo-800"
+                  >
+                    Hide
+                  </button>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  {analytics.excluded.count} rows, ${Math.round(analytics.excluded.total).toLocaleString()}.
+                  Business and capital movements are held out by category; refunds, cancellations
+                  and failed payments by status.
+                </p>
+                <div className="divide-y">
+                  {analytics.excluded.byCategory.map((c: any) => (
+                    <button
+                      key={c.name}
+                      onClick={() => drillIntoCategory(c.name)}
+                      className="w-full py-2 text-left hover:bg-gray-50 group flex items-baseline justify-between gap-3"
+                    >
+                      <span className="font-medium text-gray-900 group-hover:text-indigo-600">{c.name}</span>
+                      <span className="text-sm text-gray-500 whitespace-nowrap">{c.count} rows</span>
+                      <span className="font-semibold text-gray-900 w-32 text-right whitespace-nowrap">
+                        ${Math.round(c.total).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Calendar-year totals, and each category year by year */}
             {(() => {
