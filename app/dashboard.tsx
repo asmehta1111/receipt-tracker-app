@@ -8,6 +8,7 @@ import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
 // Deep, high-saturation hues that stay distinguishable with red-green colour
 // vision deficiency — blue / indigo / teal / orange / rose, never two neighbours.
 const VOID_STATUSES_CLIENT = ['Refunded', 'Cancelled', 'Failed', 'Duplicate', 'Void'];
+const NON_HOUSEHOLD_CLIENT = ['Brother', 'Parents', 'Someone else'];
 
 const COLORS = ['#1D4ED8', '#0F766E', '#EA580C', '#BE123C', '#6D28D9', '#0369A1',
                 '#A16207', '#9F1239', '#4338CA', '#115E59'];
@@ -77,7 +78,11 @@ export default function Dashboard() {
     window.scrollTo({ top: 0 });
   }
 
-  const PEOPLE = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Family', 'Other'];
+  // Household counts as ASM's spending; anyone else does not, even when the
+  // booking is under his name. ASM: "only me, nilza, ariana, aalia, aaryan and arvaan".
+  const HOUSEHOLD = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Arvaan', 'Family'];
+  const NON_HOUSEHOLD = ['Brother', 'Parents', 'Someone else'];
+  const PEOPLE = [...HOUSEHOLD, ...NON_HOUSEHOLD];
 
   // Travel booked under ASM's name is often for someone else. Assigning it is a
   // judgement call he makes from the route and dates, so the screen leads with
@@ -363,6 +368,8 @@ export default function Dashboard() {
     .filter(r => TRAVEL_CATEGORIES.includes(r.category)
       && !VOID_STATUSES_CLIENT.includes(r.status || '')
       && !nonExpense.includes(r.category));
+  // Attributed to someone outside the household -> not ASM's spending.
+  const excludedByPerson = travelRows.filter(r => NON_HOUSEHOLD_CLIENT.includes(r.person || ''));
   const unassignedTravel = travelRows.filter(r => !r.person);
 
   // Calendar years present in the data, newest first. Blank/garbage dates (the
@@ -1405,21 +1412,31 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-                    {PEOPLE.map(p => (
-                      <button
-                        key={p}
-                        disabled={savingPerson === String(r.idx)}
-                        onClick={() => handleSetPerson([r.idx], p)}
-                        className={`px-3 py-1.5 text-sm rounded-full border transition disabled:opacity-40 ${
-                          r.person === p
-                            ? 'bg-indigo-600 text-white border-indigo-600'
-                            : 'border-gray-300 text-gray-700 hover:border-indigo-600 hover:text-indigo-600'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    ))}
+                  {/* The quick call first — most bookings only need "was this mine
+                      or not". The specific person is there when it matters. */}
+                  <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t">
+                    <button
+                      disabled={savingPerson === String(r.idx)}
+                      onClick={() => handleSetPerson([r.idx], 'Me')}
+                      className={`px-4 py-2 text-sm font-semibold rounded-lg border-2 transition disabled:opacity-40 ${
+                        r.person === 'Me'
+                          ? 'bg-teal-600 text-white border-teal-600'
+                          : 'border-teal-600 text-teal-700 hover:bg-teal-50'
+                      }`}
+                    >
+                      ✓ Mine
+                    </button>
+                    <button
+                      disabled={savingPerson === String(r.idx)}
+                      onClick={() => handleSetPerson([r.idx], 'Someone else')}
+                      className={`px-4 py-2 text-sm font-semibold rounded-lg border-2 transition disabled:opacity-40 ${
+                        NON_HOUSEHOLD.includes(r.person || '')
+                          ? 'bg-rose-600 text-white border-rose-600'
+                          : 'border-rose-500 text-rose-700 hover:bg-rose-50'
+                      }`}
+                    >
+                      ✗ Not mine — don&apos;t count it
+                    </button>
                     {r.person && (
                       <button
                         onClick={() => handleSetPerson([r.idx], '')}
@@ -1428,6 +1445,26 @@ export default function Dashboard() {
                         Clear
                       </button>
                     )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <span className="text-xs text-gray-400 mr-1">or say exactly who:</span>
+                    {PEOPLE.filter(p => p !== 'Me').map(p => (
+                      <button
+                        key={p}
+                        disabled={savingPerson === String(r.idx)}
+                        onClick={() => handleSetPerson([r.idx], p)}
+                        className={`px-2.5 py-1 text-xs rounded-full border transition disabled:opacity-40 ${
+                          r.person === p
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : NON_HOUSEHOLD.includes(p)
+                              ? 'border-rose-200 text-rose-700 hover:border-rose-500'
+                              : 'border-gray-300 text-gray-700 hover:border-indigo-600'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
                   </div>
                 </div>
               ))}

@@ -31,10 +31,17 @@ export const VOID_STATUSES = ['Refunded', 'Cancelled', 'Failed', 'Duplicate', 'V
 
 // Column P. Travel is often booked under ASM's name for someone else, so who a
 // trip was actually for is a separate question from whether it was spend.
-export const PEOPLE = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Family', 'Other'];
+//
+// ASM: "i wont include his expenses. only me, nilza, ariana, aalia, aaryan and
+// arvaan". So attribution is also an exclusion axis — a flight or hotel booked
+// on his card for anyone outside the household is not his spending.
+export const HOUSEHOLD = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Arvaan', 'Family'];
+export const NON_HOUSEHOLD = ['Brother', 'Parents', 'Someone else'];
+export const PEOPLE = [...HOUSEHOLD, ...NON_HOUSEHOLD];
 
-export function isExpense(r: { category?: string; status?: string }) {
+export function isExpense(r: { category?: string; status?: string; person?: string }) {
   if (VOID_STATUSES.includes(r.status || '')) return false;
+  if (NON_HOUSEHOLD.includes(r.person || '')) return false;
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
 }
 
