@@ -362,14 +362,16 @@ export default function Dashboard() {
 
   const categories = [...new Set(receipts.map(r => r.category).filter(Boolean))];
 
+  // Declared before travelRows and breakdown, both of which read it — a const
+  // used above its declaration throws at render time, not at build time.
+  const nonExpense: string[] = analytics?.nonExpenseCategories || [];
+
   const TRAVEL_CATEGORIES = ['Airlines', 'Hotels', 'Travel', 'Transportation'];
   const travelRows = receipts
     .map((r, i) => ({ ...r, idx: i }))
     .filter(r => TRAVEL_CATEGORIES.includes(r.category)
       && !VOID_STATUSES_CLIENT.includes(r.status || '')
       && !nonExpense.includes(r.category));
-  // Attributed to someone outside the household -> not ASM's spending.
-  const excludedByPerson = travelRows.filter(r => NON_HOUSEHOLD_CLIENT.includes(r.person || ''));
   const unassignedTravel = travelRows.filter(r => !r.person);
 
   // Calendar years present in the data, newest first. Blank/garbage dates (the
@@ -379,7 +381,6 @@ export default function Dashboard() {
     .sort((a, b) => b.localeCompare(a));
 
   // Category -> vendor -> receipts, computed client-side so drilling is instant.
-  const nonExpense: string[] = analytics?.nonExpenseCategories || [];
   const breakdown = (() => {
     const scoped = receipts.filter(r => {
       const excluded = nonExpense.includes(r.category);
