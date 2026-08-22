@@ -47,6 +47,8 @@ export default function Dashboard() {
   const [reconcileError, setReconcileError] = useState('');
   const [reconcileSide, setReconcileSide] = useState<'chargesNoReceipt' | 'receiptsNoCharge'>('chargesNoReceipt');
   const [travelFilter, setTravelFilter] = useState<'unassigned' | 'all'>('unassigned');
+  const [travelView, setTravelView] = useState<'trips' | 'items'>('trips');
+  const [openTrips, setOpenTrips] = useState<Set<string>>(new Set());
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -433,6 +435,38 @@ export default function Dashboard() {
       && !VOID_STATUSES_CLIENT.includes(r.status || '')
       && !nonExpense.includes(r.category));
   const unassignedTravel = travelRows.filter(r => !r.person);
+
+  // Flights and hotels a few days apart are almost always one trip for the same
+  // people, so they can be assigned together. A row joins the current trip if it
+  // starts within GAP days of the last row in it — that chains a two-week trip
+  // correctly while still breaking between separate journeys.
+  const TRIP_GAP_DAYS = 5;
+  const tripsOf = (rows: any[]) => {
+    const dated = rows
+      .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.date))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const out: any[] = [];
+    for (const r of dated) {
+      const last = out[out.length - 1];
+      const d = Date.parse(r.date) / 86400000;
+      if (last && d - last.endDay <= TRIP_GAP_DAYS) {
+        last.rows.push(r);
+        last.endDay = Math.max(last.endDay, d);
+        last.end = r.date;
+      } else {
+        out.push({ rows: [r], start: r.date, end: r.date, endDay: d });
+      }
+    }
+    return out
+      .map(t => ({
+        ...t,
+        key: t.start + '|' + t.rows.length,
+        total: t.rows.reduce((s: number, r: any) => s + (r.usdEstimate || 0), 0),
+        people: [...new Set(t.rows.map((r: any) => r.person).filter(Boolean))],
+        places: [...new Set(t.rows.map((r: any) => r.vendor))].slice(0, 4),
+      }))
+      .sort((a, b) => b.total - a.total);
+  };
 
   // Calendar years present in the data, newest first. Blank/garbage dates (the
   // 1905 epoch artefacts) are dropped rather than shown as a year.
@@ -1487,18 +1521,33 @@ export default function Dashboard() {
                     and dates are shown so you can judge each one.
                   </p>
                 </div>
-                <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-                  {([['unassigned', 'Not yet assigned'], ['all', 'All travel']] as const).map(([k, label]) => (
-                    <button
-                      key={k}
-                      onClick={() => setTravelFilter(k)}
-                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
-                        travelFilter === k ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex flex-col items-end gap-2">
+                  <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                    {([['trips', 'By trip'], ['items', 'One by one']] as const).map(([k, label]) => (
+                      <button
+                        key={k}
+                        onClick={() => setTravelView(k)}
+                        className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                          travelView === k ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                    {([['unassigned', 'Not yet assigned'], ['all', 'All travel']] as const).map(([k, label]) => (
+                      <button
+                        key={k}
+                        onClick={() => setTravelFilter(k)}
+                        className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                          travelFilter === k ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1524,7 +1573,121 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {(travelFilter === 'unassigned' ? unassignedTravel : travelRows)
+            {travelView === 'trips' && tripsOf(travelFilter === 'unassigned' ? unassignedTravel : travelRows)
+              .slice(0, 80)
+              .map(trip => {
+                const open = openTrips.has(trip.key);
+                const idxs = trip.rows.map((r: any) => r.idx);
+                const busy = savingPerson === idxs.join(',');
+                const span = trip.start === trip.end ? trip.start : `${trip.start} → ${trip.end}`;
+                return (
+                  <div key={trip.key} className="bg-white rounded-lg shadow p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-gray-900">{span}</span>
+                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                            {trip.rows.length} bookings
+                          </span>
+                          {trip.people.map((p: string) => (
+                            <span key={p} className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                              NON_HOUSEHOLD.includes(p) ? 'bg-rose-100 text-rose-700' : 'bg-indigo-100 text-indigo-700'
+                            }`}>{p}</span>
+                          ))}
+                        </div>
+                        <p className="text-sm text-gray-600 mt-1">{trip.places.join(' · ')}</p>
+                        {/* One representative description tells you what the trip was */}
+                        <p className="text-sm text-gray-800 mt-1">
+                          {(trip.rows.find((r: any) => r.category === 'Airlines') || trip.rows[0]).description
+                            || (trip.rows[0].subject || '')}
+                        </p>
+                      </div>
+                      <div className="text-right whitespace-nowrap">
+                        <div className="text-lg font-bold text-gray-900">
+                          ${Math.round(trip.total).toLocaleString()}
+                        </div>
+                        <button
+                          onClick={() => toggle(openTrips, trip.key, setOpenTrips)}
+                          className="text-sm text-indigo-600 hover:text-indigo-800"
+                        >
+                          {open ? 'Hide' : 'Show'} {trip.rows.length} items
+                        </button>
+                      </div>
+                    </div>
+
+                    {open && (
+                      <div className="mt-3 pl-3 border-l-2 border-gray-200 space-y-2">
+                        {trip.rows.map((r: any) => (
+                          <div key={r.idx} className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <span className="text-sm text-gray-500">{r.date}</span>{' '}
+                              <span className="text-sm font-medium text-gray-900">{r.vendor}</span>
+                              {r.person && (
+                                <span className="ml-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                                  {r.person}
+                                </span>
+                              )}
+                              <p className="text-xs text-gray-600">{(r.description || r.subject || '').slice(0, 110)}</p>
+                            </div>
+                            <div className="flex items-center gap-1 whitespace-nowrap">
+                              <span className="text-sm text-gray-700 tabular-nums">
+                                ${Math.round(r.usdEstimate || 0).toLocaleString()}
+                              </span>
+                              <button
+                                onClick={() => handleSetPerson([r.idx], 'Me')}
+                                className="text-[11px] px-2 py-0.5 rounded border border-teal-500 text-teal-700 hover:bg-teal-50"
+                              >Mine</button>
+                              <button
+                                onClick={() => handleSetPerson([r.idx], 'Someone else')}
+                                className="text-[11px] px-2 py-0.5 rounded border border-rose-400 text-rose-700 hover:bg-rose-50"
+                              >Not</button>
+                              <button
+                                onClick={() => handleSetStatusRows([r.idx], 'Cancelled')}
+                                className="text-[11px] px-2 py-0.5 rounded border border-amber-400 text-amber-700 hover:bg-amber-50"
+                              >Cancel</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* One click assigns the whole trip */}
+                    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t">
+                      <button
+                        disabled={busy}
+                        onClick={() => handleSetPerson(idxs, 'Me')}
+                        className="px-4 py-2 text-sm font-semibold rounded-lg border-2 border-teal-600 text-teal-700 hover:bg-teal-600 hover:text-white transition disabled:opacity-40"
+                      >
+                        ✓ Whole trip is mine
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => handleSetPerson(idxs, 'Family')}
+                        className="px-4 py-2 text-sm font-semibold rounded-lg border-2 border-indigo-500 text-indigo-700 hover:bg-indigo-600 hover:text-white transition disabled:opacity-40"
+                      >
+                        Family trip
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => handleSetPerson(idxs, 'Someone else')}
+                        className="px-4 py-2 text-sm font-semibold rounded-lg border-2 border-rose-500 text-rose-700 hover:bg-rose-600 hover:text-white transition disabled:opacity-40"
+                      >
+                        ✗ Not mine
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => handleSetStatusRows(idxs, 'Cancelled')}
+                        className="px-3 py-2 text-sm rounded-lg border border-amber-400 text-amber-700 hover:bg-amber-50 transition disabled:opacity-40"
+                      >
+                        ⊘ Trip cancelled
+                      </button>
+                      {busy && <span className="text-sm text-indigo-600">Saving…</span>}
+                    </div>
+                  </div>
+                );
+              })}
+
+            {travelView === 'items' && (travelFilter === 'unassigned' ? unassignedTravel : travelRows)
               // Flights first: they name passengers, so assigning them fills in
               // the context that makes the ambiguous hotel bookings decidable.
               .slice()
