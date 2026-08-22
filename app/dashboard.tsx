@@ -7,6 +7,8 @@ import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
 
 // Deep, high-saturation hues that stay distinguishable with red-green colour
 // vision deficiency — blue / indigo / teal / orange / rose, never two neighbours.
+const VOID_STATUSES_CLIENT = ['Refunded', 'Cancelled', 'Failed', 'Duplicate', 'Void'];
+
 const COLORS = ['#1D4ED8', '#0F766E', '#EA580C', '#BE123C', '#6D28D9', '#0369A1',
                 '#A16207', '#9F1239', '#4338CA', '#115E59'];
 
@@ -38,6 +40,8 @@ export default function Dashboard() {
   const [filterYear, setFilterYear] = useState('');
   const [breakdownYear, setBreakdownYear] = useState('');
   const [showExcluded, setShowExcluded] = useState(false);
+  const [savingPerson, setSavingPerson] = useState<string | null>(null);
+  const [travelFilter, setTravelFilter] = useState<'unassigned' | 'all'>('unassigned');
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -71,6 +75,30 @@ export default function Dashboard() {
     setFilterYear(year);
     setActiveTab('receipts');
     window.scrollTo({ top: 0 });
+  }
+
+  const PEOPLE = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Family', 'Other'];
+
+  // Travel booked under ASM's name is often for someone else. Assigning it is a
+  // judgement call he makes from the route and dates, so the screen leads with
+  // the description rather than the subject line.
+  async function handleSetPerson(rowIndices: number[], person: string) {
+    setSavingPerson(rowIndices.join(','));
+    try {
+      const res = await fetch('/api/receipts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setPerson', data: { rowIndices, person } }),
+      });
+      if (res.ok) {
+        setReceipts(prev => prev.map((r, i) => rowIndices.includes(i) ? { ...r, person } : r));
+        setSelectedRows(new Set());
+      }
+    } catch (err) {
+      console.error('Failed to set person:', err);
+    } finally {
+      setSavingPerson(null);
+    }
   }
 
   async function fetchDuplicates() {
@@ -329,6 +357,14 @@ export default function Dashboard() {
 
   const categories = [...new Set(receipts.map(r => r.category).filter(Boolean))];
 
+  const TRAVEL_CATEGORIES = ['Airlines', 'Hotels', 'Travel', 'Transportation'];
+  const travelRows = receipts
+    .map((r, i) => ({ ...r, idx: i }))
+    .filter(r => TRAVEL_CATEGORIES.includes(r.category)
+      && !VOID_STATUSES_CLIENT.includes(r.status || '')
+      && !nonExpense.includes(r.category));
+  const unassignedTravel = travelRows.filter(r => !r.person);
+
   // Calendar years present in the data, newest first. Blank/garbage dates (the
   // 1905 epoch artefacts) are dropped rather than shown as a year.
   const years = [...new Set(receipts.map(yearOf))]
@@ -434,6 +470,21 @@ export default function Dashboard() {
               }`}
             >
               Breakdown
+            </button>
+            <button
+              onClick={() => setActiveTab('travel')}
+              className={`py-4 px-2 border-b-2 font-medium transition flex items-center gap-2 ${
+                activeTab === 'travel'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Who travelled
+              {unassignedTravel.length > 0 && (
+                <span className="bg-teal-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full">
+                  {unassignedTravel.length}
+                </span>
+              )}
             </button>
             <button
               onClick={() => { setActiveTab('duplicates'); if (!duplicates) fetchDuplicates(); }}
@@ -1236,6 +1287,156 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'travel' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">Who was this trip for?</h2>
+                  <p className="text-gray-600 mt-1">
+                    Flights and hotels are often booked under your name for someone else. The route
+                    and dates are shown so you can judge each one.
+                  </p>
+                </div>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                  {([['unassigned', 'Not yet assigned'], ['all', 'All travel']] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      onClick={() => setTravelFilter(k)}
+                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                        travelFilter === k ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Totals per person, so the split is visible as you go */}
+              <div className="flex flex-wrap gap-2 mt-4">
+                {PEOPLE.map(p => {
+                  const rows = travelRows.filter(r => r.person === p);
+                  if (!rows.length) return null;
+                  const total = rows.reduce((s, r) => s + (r.usdEstimate || 0), 0);
+                  return (
+                    <span key={p} className="text-sm bg-gray-100 text-gray-800 px-3 py-1 rounded-full">
+                      {p}: <strong>${Math.round(total).toLocaleString()}</strong>
+                      <span className="text-gray-500"> ({rows.length})</span>
+                    </span>
+                  );
+                })}
+                <span className="text-sm bg-teal-50 text-teal-800 px-3 py-1 rounded-full">
+                  Unassigned: <strong>
+                    ${Math.round(unassignedTravel.reduce((s, r) => s + (r.usdEstimate || 0), 0)).toLocaleString()}
+                  </strong>
+                  <span className="text-teal-600"> ({unassignedTravel.length})</span>
+                </span>
+              </div>
+            </div>
+
+            {(travelFilter === 'unassigned' ? unassignedTravel : travelRows)
+              // Flights first: they name passengers, so assigning them fills in
+              // the context that makes the ambiguous hotel bookings decidable.
+              .slice()
+              .sort((a, b) =>
+                (a.category === 'Airlines' ? 0 : 1) - (b.category === 'Airlines' ? 0 : 1)
+                || (b.usdEstimate || 0) - (a.usdEstimate || 0))
+              .slice(0, 150)
+              .map(r => (
+                <div key={r.idx} className="bg-white rounded-lg shadow p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-gray-900">{r.vendor}</span>
+                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{r.category}</span>
+                        <span className="text-sm text-gray-500">{r.date}</span>
+                        {r.person && (
+                          <span className="text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded">
+                            {r.person}
+                          </span>
+                        )}
+                      </div>
+                      {/* The description carries route, dates and passengers — the
+                          whole point of this screen, so it leads. */}
+                      <p className="text-gray-800 mt-1.5">{r.description || r.subject}</p>
+                      {r.description && (
+                        <p className="text-xs text-gray-400 mt-1 truncate">{r.subject}</p>
+                      )}
+
+                      {/* Hotels are always booked as "A Singh" / "A S Mehta", so the
+                          booking itself never says who stayed. The flights around
+                          the same dates usually do — they name passengers. */}
+                      {(r.category === 'Hotels' || r.category === 'Travel') && (() => {
+                        const d = Date.parse(r.date);
+                        if (!Number.isFinite(d)) return null;
+                        const near = travelRows.filter(f =>
+                          f.idx !== r.idx && f.category === 'Airlines' &&
+                          Math.abs(Date.parse(f.date) - d) <= 10 * 86400000);
+                        if (!near.length) return null;
+                        return (
+                          <div className="mt-2 pl-3 border-l-2 border-teal-200">
+                            <p className="text-xs font-semibold text-teal-800 uppercase tracking-wide">
+                              Flights within 10 days
+                            </p>
+                            {near.slice(0, 3).map(f => (
+                              <p key={f.idx} className="text-xs text-gray-600 mt-0.5">
+                                <span className="text-gray-400">{f.date}</span>{' '}
+                                {f.person && (
+                                  <span className="text-indigo-700 font-semibold">[{f.person}]</span>
+                                )}{' '}
+                                {(f.description || f.subject).slice(0, 96)}
+                              </p>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="text-right whitespace-nowrap">
+                      <div className="text-lg font-bold text-gray-900">
+                        ${Math.round(r.usdEstimate || 0).toLocaleString()}
+                      </div>
+                      {r.currency !== 'USD' && (
+                        <div className="text-xs text-gray-500">{r.currency} {r.amount?.toLocaleString()}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
+                    {PEOPLE.map(p => (
+                      <button
+                        key={p}
+                        disabled={savingPerson === String(r.idx)}
+                        onClick={() => handleSetPerson([r.idx], p)}
+                        className={`px-3 py-1.5 text-sm rounded-full border transition disabled:opacity-40 ${
+                          r.person === p
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'border-gray-300 text-gray-700 hover:border-indigo-600 hover:text-indigo-600'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                    {r.person && (
+                      <button
+                        onClick={() => handleSetPerson([r.idx], '')}
+                        className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-800"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+            {(travelFilter === 'unassigned' ? unassignedTravel : travelRows).length === 0 && (
+              <div className="bg-white rounded-lg shadow p-10 text-center">
+                <p className="text-2xl font-semibold text-gray-900">All travel assigned</p>
+              </div>
+            )}
           </div>
         )}
 

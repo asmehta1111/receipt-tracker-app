@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllReceipts, addReceipt, bulkUpdateCategory, deleteReceipts, renameVendor, updateDescription, setStatus, VOID_STATUSES } from '@/lib/sheets';
+import { getAllReceipts, addReceipt, bulkUpdateCategory, deleteReceipts, renameVendor, updateDescription, setStatus, setPerson, VOID_STATUSES, PEOPLE } from '@/lib/sheets';
 import { isAuthenticated } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -46,6 +46,15 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Unknown status: ${status}` }, { status: 400 });
       }
       const result = await setStatus(rowIndices, status || '');
+      return NextResponse.json({ success: true, ...result });
+    }
+
+    if (action === 'setPerson') {
+      const { rowIndices, person } = data;
+      if (person && !PEOPLE.includes(person)) {
+        return NextResponse.json({ error: `Unknown person: ${person}` }, { status: 400 });
+      }
+      const result = await setPerson(rowIndices, person || '');
       return NextResponse.json({ success: true, ...result });
     }
 

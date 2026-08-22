@@ -29,6 +29,10 @@ export const NON_EXPENSE_CATEGORIES = [
 // money that never actually left, so it must not count as spend.
 export const VOID_STATUSES = ['Refunded', 'Cancelled', 'Failed', 'Duplicate', 'Void'];
 
+// Column P. Travel is often booked under ASM's name for someone else, so who a
+// trip was actually for is a separate question from whether it was spend.
+export const PEOPLE = ['Me', 'Nilza', 'Ariana', 'Aalia', 'Aaryan', 'Family', 'Other'];
+
 export function isExpense(r: { category?: string; status?: string }) {
   if (VOID_STATUSES.includes(r.status || '')) return false;
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
@@ -120,6 +124,14 @@ export async function setStatus(rowIndices: number[], status: string) {
     setCellRequest(i + 1, 14, status)); // column O
   await runBatch(requests);
   return { updated: rowIndices.length, status };
+}
+
+/** Records who a receipt was actually for. Empty string clears it. */
+export async function setPerson(rowIndices: number[], person: string) {
+  const requests: sheets_v4.Schema$Request[] = rowIndices.map(i =>
+    setCellRequest(i + 1, 15, person)); // column P
+  await runBatch(requests);
+  return { updated: rowIndices.length, person };
 }
 
 /** Deletes the given sheet rows (0-based data indices), bottom-up. */
@@ -286,7 +298,7 @@ export async function getAllReceipts() {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:O',
+      range: 'Sheet1!A:P',
       // Numbers as numbers (no thousands separators or currency symbols),
       // but dates still as "YYYY-MM-DD" rather than serial numbers.
       valueRenderOption: 'UNFORMATTED_VALUE',
@@ -311,6 +323,7 @@ export async function getAllReceipts() {
       description: row[12] || '',
       threadId: row[13] || '',
       status: row[14] || '',
+      person: row[15] || '',
     }));
   } catch (err) {
     console.error('Error fetching receipts:', err);
