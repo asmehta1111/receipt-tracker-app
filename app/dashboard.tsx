@@ -266,6 +266,36 @@ export default function Dashboard() {
 
   const yearOf = (r: any) => String(r.date || '').slice(0, 4);
 
+  // Claude names the same vendor differently on different emails, so totals get
+  // split. These merge the ones that matter. Deliberately explicit rather than
+  // fuzzy: matching on the first word would fold "United Help Ukraine" (a
+  // donation) into United Airlines, and "Deutsche Bahn" into the school.
+  const VENDOR_ALIASES: [RegExp, string][] = [
+    [/^(rbyc\b|royal bombay)/i, 'Royal Bombay Yacht Club'],
+    // DSB = Deutsche Schule Bombay. Claude has variously guessed "Delhi School
+    // of Business" and "Delhi Public School" — all the same school.
+    [/^(dsb\b|dsbindia|dsb india|delhi school of business|delhi public school|deutscher schulverein)/i,
+      'DSB (Deutsche Schule Bombay)'],
+    [/^united airlines/i, 'United Airlines'],
+    [/^american airlines/i, 'American Airlines'],
+    [/^marriott\b/i, 'Marriott Hotels'],
+    [/^jw marriott/i, 'JW Marriott'],
+    [/^w hotels|^w$/i, 'W Hotels'],
+    [/^(india )?income tax/i, 'Income Tax Department'],
+    [/^kotak/i, 'Kotak Mahindra Bank'],
+    [/^shady grove/i, 'Shady Grove Fertility'],
+    [/^swiss/i, 'SWISS'],
+    [/^singapore airlines/i, 'Singapore Airlines'],
+    [/^(morgan,? lewis)/i, 'Morgan Lewis'],
+    [/^surrogatefirst/i, 'SurrogateFirst'],
+  ];
+
+  const canonicalVendor = (vendor: string) => {
+    const v = String(vendor || '').trim();
+    for (const [re, name] of VENDOR_ALIASES) if (re.test(v)) return name;
+    return v || '(no vendor)';
+  };
+
   const filteredReceipts = receipts.filter(r => {
     const matchesCategory = !filterCategory || r.category === filterCategory;
     const matchesYear = !filterYear || yearOf(r) === filterYear;
@@ -303,7 +333,7 @@ export default function Dashboard() {
       c.total += r.usdEstimate || 0;
       c.count += 1;
 
-      const vendor = r.vendor || '(no vendor)';
+      const vendor = canonicalVendor(r.vendor);
       if (!c.vendors.has(vendor)) c.vendors.set(vendor, { name: vendor, total: 0, count: 0, rows: [] });
       const v = c.vendors.get(vendor);
       v.total += r.usdEstimate || 0;
@@ -490,6 +520,73 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
+
+            {/* Every vendor billed more than once, summed per calendar year.
+                Vendor spellings are merged first (see VENDOR_ALIASES) or a
+                vendor's total splits across the names Claude gave it. */}
+            {(() => {
+              const expenses = receipts.filter(r => !nonExpense.includes(r.category));
+              const map = new Map<string, any>();
+              for (const r of expenses) {
+                const v = canonicalVendor(r.vendor);
+                const y = yearOf(r);
+                if (!years.includes(y)) continue;
+                if (!map.has(v)) map.set(v, { name: v, count: 0, total: 0, byYear: {} as any, spellings: new Set<string>() });
+                const e = map.get(v);
+                e.count += 1;
+                e.total += r.usdEstimate || 0;
+                e.byYear[y] = (e.byYear[y] || 0) + (r.usdEstimate || 0);
+                e.spellings.add(r.vendor);
+              }
+              const vendors = [...map.values()].filter(v => v.count > 1).sort((a, b) => b.total - a.total);
+              const shown = years.filter(y => vendors.some(v => v.byYear[y]));
+
+              return (
+                <div className="bg-white rounded-lg shadow p-6 overflow-x-auto">
+                  <h2 className="text-lg font-semibold text-gray-900">Vendors billed more than once</h2>
+                  <p className="text-sm text-gray-500 mb-4">
+                    {vendors.length} vendors, summed per calendar year. Click a name for its receipts.
+                  </p>
+                  <table className="w-full text-sm min-w-[720px]">
+                    <thead>
+                      <tr className="text-gray-500 border-b">
+                        <th className="text-left pb-2 font-medium">Vendor</th>
+                        <th className="text-right pb-2 font-medium w-16">Items</th>
+                        {shown.map(y => <th key={y} className="text-right pb-2 font-medium w-24">{y}</th>)}
+                        <th className="text-right pb-2 font-medium w-28">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vendors.map(v => (
+                        <tr key={v.name} className="border-b last:border-b-0 hover:bg-gray-50">
+                          <td className="py-2">
+                            <button
+                              onClick={() => drillIntoVendor([...v.spellings][0])}
+                              className="text-gray-900 hover:text-indigo-600 font-medium text-left"
+                              title={v.spellings.size > 1 ? `Merged: ${[...v.spellings].join(' · ')}` : undefined}
+                            >
+                              {v.name}
+                              {v.spellings.size > 1 && (
+                                <span className="ml-1.5 text-[10px] text-gray-400">({v.spellings.size} names)</span>
+                              )}
+                            </button>
+                          </td>
+                          <td className="py-2 text-right text-gray-500 tabular-nums">{v.count}</td>
+                          {shown.map(y => (
+                            <td key={y} className={`py-2 text-right tabular-nums ${v.byYear[y] ? 'text-gray-900' : 'text-gray-300'}`}>
+                              {v.byYear[y] ? `$${Math.round(v.byYear[y]).toLocaleString()}` : '—'}
+                            </td>
+                          ))}
+                          <td className="py-2 text-right font-semibold text-gray-900 tabular-nums">
+                            ${Math.round(v.total).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
 
             {/* Calendar-year totals, and each category year by year */}
             {(() => {
