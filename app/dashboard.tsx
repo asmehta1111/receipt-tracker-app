@@ -42,6 +42,10 @@ export default function Dashboard() {
   const [breakdownYear, setBreakdownYear] = useState('');
   const [showExcluded, setShowExcluded] = useState(false);
   const [savingPerson, setSavingPerson] = useState<string | null>(null);
+  const [reconcile, setReconcile] = useState<any>(null);
+  const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [reconcileError, setReconcileError] = useState('');
+  const [reconcileSide, setReconcileSide] = useState<'chargesNoReceipt' | 'receiptsNoCharge'>('chargesNoReceipt');
   const [travelFilter, setTravelFilter] = useState<'unassigned' | 'all'>('unassigned');
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
@@ -125,6 +129,40 @@ export default function Dashboard() {
       console.error('Failed to set status:', err);
     } finally {
       setSavingPerson(null);
+    }
+  }
+
+  async function fetchReconcile() {
+    setReconcileBusy(true);
+    try {
+      const res = await fetch('/api/reconcile');
+      if (res.ok) setReconcile(await res.json());
+    } catch (err) {
+      console.error('Failed to load reconciliation:', err);
+    } finally {
+      setReconcileBusy(false);
+    }
+  }
+
+  // The CSV never leaves for anywhere except this app's own API — it is parsed
+  // server-side and stored on the same Sheet as everything else.
+  async function handleStatementUpload(file: File) {
+    setReconcileBusy(true);
+    setReconcileError('');
+    try {
+      const csv = await file.text();
+      const res = await fetch('/api/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setReconcileError(data.error || 'Import failed'); return; }
+      setReconcile(data);
+    } catch (err) {
+      setReconcileError('Could not read that file');
+    } finally {
+      setReconcileBusy(false);
     }
   }
 
@@ -515,6 +553,16 @@ export default function Dashboard() {
                   {unassignedTravel.length}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => { setActiveTab('reconcile'); if (!reconcile) fetchReconcile(); }}
+              className={`py-4 px-2 border-b-2 font-medium transition ${
+                activeTab === 'reconcile'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Reconcile
             </button>
             <button
               onClick={() => { setActiveTab('duplicates'); if (!duplicates) fetchDuplicates(); }}
@@ -1317,6 +1365,112 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'reconcile' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold text-gray-900">Reconcile against your card statement</h2>
+              <p className="text-gray-600 mt-1">
+                The tracker only knows what vendors emailed you. Your statement knows what was
+                actually charged. Upload the CSV and this shows both gaps.
+              </p>
+              <ol className="text-sm text-gray-600 mt-3 space-y-1 list-decimal list-inside">
+                <li>On amex.com go to <strong>Statements &amp; Activity → Download → CSV</strong></li>
+                <li>Pick the date range you want (they allow several years back)</li>
+                <li>Drop the file below — nothing is sent anywhere but this app</li>
+              </ol>
+
+              <label className="mt-4 flex items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-6 cursor-pointer hover:border-indigo-500 hover:bg-indigo-50 transition">
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleStatementUpload(f); }}
+                />
+                <span className="text-gray-600">
+                  {reconcileBusy ? 'Working…' : 'Choose a statement CSV, or drop one here'}
+                </span>
+              </label>
+
+              {reconcileError && (
+                <p className="mt-3 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded px-3 py-2">
+                  {reconcileError}
+                </p>
+              )}
+
+              {reconcile?.totals && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-1 mt-5 bg-gray-200 border border-gray-200 rounded overflow-hidden">
+                  {[
+                    ['Charges on statement', reconcile.totals.charges, reconcile.totals.chargeValue, ''],
+                    ['Matched to a receipt', reconcile.totals.matched, reconcile.totals.matchedValue, 'text-teal-700'],
+                    ['Charged, no receipt', reconcile.totals.chargesNoReceipt, reconcile.totals.chargesNoReceiptValue, 'text-rose-700'],
+                    ['Receipt, no charge', reconcile.totals.receiptsNoCharge, reconcile.totals.receiptsNoChargeValue, 'text-amber-700'],
+                  ].map(([label, n, v, cls]: any) => (
+                    <div key={label} className="bg-white p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold">{label}</div>
+                      <div className={`text-xl font-bold tabular-nums ${cls}`}>${Math.round(v).toLocaleString()}</div>
+                      <div className="text-xs text-gray-500">{n} rows</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {reconcile?.totals && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit mb-4">
+                  {([
+                    ['chargesNoReceipt', `Charged but no receipt (${reconcile.totals.chargesNoReceipt})`],
+                    ['receiptsNoCharge', `Receipt but no charge (${reconcile.totals.receiptsNoCharge})`],
+                  ] as const).map(([k, label]) => (
+                    <button
+                      key={k}
+                      onClick={() => setReconcileSide(k)}
+                      className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                        reconcileSide === k ? 'bg-white shadow text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="text-sm text-gray-500 mb-3">
+                  {reconcileSide === 'chargesNoReceipt'
+                    ? 'Real money left your card and no receipt email was found — spending the tracker is missing entirely.'
+                    : 'A receipt exists but no matching card charge — paid another way, never actually billed, or already cancelled.'}
+                </p>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[560px]">
+                    <thead>
+                      <tr className="text-left text-gray-500 border-b">
+                        <th className="pb-2 font-medium w-28">Date</th>
+                        <th className="pb-2 font-medium">{reconcileSide === 'chargesNoReceipt' ? 'Statement description' : 'Vendor / subject'}</th>
+                        <th className="pb-2 font-medium text-right w-28">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(reconcile[reconcileSide] || []).map((x: any, i: number) => (
+                        <tr key={i} className="border-b last:border-b-0">
+                          <td className="py-2 text-gray-600 tabular-nums">{x.date}</td>
+                          <td className="py-2 text-gray-900">
+                            {reconcileSide === 'chargesNoReceipt'
+                              ? x.description
+                              : <><span className="font-medium">{x.vendor}</span> <span className="text-gray-500">— {x.description || x.subject}</span></>}
+                          </td>
+                          <td className="py-2 text-right font-semibold tabular-nums">
+                            ${Math.round(Math.abs(x.amount ?? x.usdEstimate ?? 0)).toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

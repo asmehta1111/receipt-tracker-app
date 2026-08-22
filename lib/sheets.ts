@@ -466,3 +466,102 @@ export async function updateDescription(rowIndex: number, description: string) {
     throw err;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Card statement reconciliation
+ *
+ * The receipt tracker only knows what a vendor emailed. A card statement
+ * knows what was actually charged. Comparing them surfaces both gaps:
+ * charges with no receipt (missing from the tracker) and receipts with no
+ * charge (never actually billed, or paid another way).
+ * ------------------------------------------------------------------ */
+
+const CHARGES_TAB = 'CardCharges';
+
+export type CardCharge = { date: string; description: string; amount: number; card?: string };
+
+/** Replaces the stored statement rows with a freshly uploaded set. */
+export async function saveCardCharges(charges: CardCharge[]) {
+  const sheets = await getSheets();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  if (!meta.data.sheets?.some(s => s.properties?.title === CHARGES_TAB)) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: CHARGES_TAB } } }] },
+    });
+  }
+  await sheets.spreadsheets.values.clear({ spreadsheetId: SHEET_ID, range: `${CHARGES_TAB}!A:E` });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${CHARGES_TAB}!A1`,
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [['Date', 'Description', 'Amount', 'Card', 'Matched receipt row'],
+        ...charges.map(c => [c.date, c.description, c.amount, c.card || '', ''])],
+    },
+  });
+  return charges.length;
+}
+
+export async function getCardCharges(): Promise<CardCharge[]> {
+  const sheets = await getSheets();
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID, range: `${CHARGES_TAB}!A2:E`,
+      valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'FORMATTED_STRING',
+    });
+    return (res.data.values || [])
+      .filter(r => r[0])
+      .map(r => ({ date: String(r[0]), description: String(r[1] || ''), amount: Number(r[2]) || 0, card: String(r[3] || '') }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Matches statement charges to receipts on amount, within a date window.
+ * Each side is consumed once, so a recurring charge doesn't match the same
+ * receipt repeatedly. Statement dates lag the transaction by a day or two, and
+ * the tracker's dates are email dates, so the window has to be generous.
+ */
+export async function reconcileCharges(windowDays = 5) {
+  const [receipts, charges] = await Promise.all([getAllReceipts(), getCardCharges()]);
+  const spendable = receipts
+    .map((r, i) => ({ ...r, idx: i }))
+    .filter(r => isExpense(r) && (r.usdEstimate || 0) > 0);
+
+  const day = (s: string) => { const t = Date.parse(s); return Number.isFinite(t) ? t / 86400000 : null; };
+  const usedReceipt = new Set<number>();
+  const matched: any[] = [];
+  const chargesNoReceipt: any[] = [];
+
+  for (const c of charges) {
+    const cd = day(c.date);
+    const hit = spendable
+      .filter(r => !usedReceipt.has(r.idx) && Math.abs((r.usdEstimate || 0) - Math.abs(c.amount)) < 0.02)
+      .filter(r => { const rd = day(r.date); return cd !== null && rd !== null && Math.abs(rd - cd) <= windowDays; })
+      .sort((a, b) => Math.abs(day(a.date)! - cd!) - Math.abs(day(b.date)! - cd!))[0];
+    if (hit) { usedReceipt.add(hit.idx); matched.push({ charge: c, receipt: hit }); }
+    else chargesNoReceipt.push(c);
+  }
+
+  const receiptsNoCharge = spendable.filter(r => !usedReceipt.has(r.idx));
+  const sum = (a: any[], f: (x: any) => number) => Math.round(a.reduce((s, x) => s + f(x), 0) * 100) / 100;
+
+  return {
+    windowDays,
+    totals: {
+      charges: charges.length,
+      chargeValue: sum(charges, c => Math.abs(c.amount)),
+      matched: matched.length,
+      matchedValue: sum(matched, m => Math.abs(m.charge.amount)),
+      chargesNoReceipt: chargesNoReceipt.length,
+      chargesNoReceiptValue: sum(chargesNoReceipt, c => Math.abs(c.amount)),
+      receiptsNoCharge: receiptsNoCharge.length,
+      receiptsNoChargeValue: sum(receiptsNoCharge, r => r.usdEstimate || 0),
+    },
+    chargesNoReceipt: chargesNoReceipt.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 200),
+    receiptsNoCharge: receiptsNoCharge.sort((a, b) => (b.usdEstimate || 0) - (a.usdEstimate || 0)).slice(0, 200),
+    matched: matched.slice(0, 50),
+  };
+}
