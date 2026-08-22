@@ -35,6 +35,8 @@ export default function Dashboard() {
   const [dupLoading, setDupLoading] = useState(false);
   const [mergingKey, setMergingKey] = useState<string | null>(null);
   const [dismissedGroups, setDismissedGroups] = useState<Set<string>>(new Set());
+  const [filterYear, setFilterYear] = useState('');
+  const [breakdownYear, setBreakdownYear] = useState('');
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -58,6 +60,14 @@ export default function Dashboard() {
   function drillIntoVendor(vendor: string) {
     setFilterCategory('');
     setSearchQuery(vendor);
+    setActiveTab('receipts');
+    window.scrollTo({ top: 0 });
+  }
+
+  function drillIntoYear(year: string) {
+    setFilterCategory('');
+    setSearchQuery('');
+    setFilterYear(year);
     setActiveTab('receipts');
     window.scrollTo({ top: 0 });
   }
@@ -153,6 +163,28 @@ export default function Dashboard() {
     }
   }
 
+  // Marks the selected receipts as money that never actually left — a refunded
+  // flight, a cancelled booking, a failed payment. Empty string undoes it.
+  async function handleSetStatus(status: string) {
+    if (selectedRows.size === 0) return;
+    try {
+      const res = await fetch('/api/receipts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'setStatus',
+          data: { rowIndices: Array.from(selectedRows), status },
+        }),
+      });
+      if (res.ok) {
+        setSelectedRows(new Set());
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to set status:', err);
+    }
+  }
+
   async function handleBulkUpdateCategory() {
     if (selectedRows.size === 0 || !bulkCategory) return;
 
@@ -231,24 +263,34 @@ export default function Dashboard() {
     }
   }
 
+  const yearOf = (r: any) => String(r.date || '').slice(0, 4);
+
   const filteredReceipts = receipts.filter(r => {
     const matchesCategory = !filterCategory || r.category === filterCategory;
+    const matchesYear = !filterYear || yearOf(r) === filterYear;
     const matchesSearch = !searchQuery ||
       r.vendor.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.date.includes(searchQuery) ||
       r.category.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesYear && matchesSearch;
   });
 
   const categories = [...new Set(receipts.map(r => r.category).filter(Boolean))];
+
+  // Calendar years present in the data, newest first. Blank/garbage dates (the
+  // 1905 epoch artefacts) are dropped rather than shown as a year.
+  const years = [...new Set(receipts.map(yearOf))]
+    .filter(y => /^(19[9]\d|20\d\d)$/.test(y))
+    .sort((a, b) => b.localeCompare(a));
 
   // Category -> vendor -> receipts, computed client-side so drilling is instant.
   const nonExpense: string[] = analytics?.nonExpenseCategories || [];
   const breakdown = (() => {
     const scoped = receipts.filter(r => {
       const excluded = nonExpense.includes(r.category);
-      return breakdownScope === 'all' ? true : breakdownScope === 'excluded' ? excluded : !excluded;
+      const inScope = breakdownScope === 'all' ? true : breakdownScope === 'excluded' ? excluded : !excluded;
+      return inScope && (!breakdownYear || yearOf(r) === breakdownYear);
     });
     const total = scoped.reduce((s, r) => s + (r.usdEstimate || 0), 0);
 
@@ -419,6 +461,110 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {/* Calendar-year totals, and each category year by year */}
+            {(() => {
+              const expenses = receipts.filter(r => !nonExpense.includes(r.category));
+              const perYear = years.map(y => {
+                const rows = expenses.filter(r => yearOf(r) === y);
+                return { year: y, total: rows.reduce((s, r) => s + (r.usdEstimate || 0), 0), count: rows.length };
+              }).filter(y => y.count > 0);
+              const maxYear = Math.max(1, ...perYear.map(y => y.total));
+
+              // category -> year -> total, for the matrix below
+              const catYear = new Map<string, Map<string, number>>();
+              for (const r of expenses) {
+                const c = r.category || '(uncategorised)';
+                const y = yearOf(r);
+                if (!years.includes(y)) continue;
+                if (!catYear.has(c)) catYear.set(c, new Map());
+                const m = catYear.get(c)!;
+                m.set(y, (m.get(y) || 0) + (r.usdEstimate || 0));
+              }
+              const catRows = [...catYear.entries()]
+                .map(([name, m]) => ({ name, byYear: m, total: [...m.values()].reduce((a, b) => a + b, 0) }))
+                .sort((a, b) => b.total - a.total);
+              const shownYears = perYear.map(y => y.year);
+
+              return (
+                <>
+                  <div className="bg-white rounded-lg shadow p-6">
+                    <h2 className="text-lg font-semibold text-gray-900">Spend by calendar year</h2>
+                    <p className="text-sm text-gray-500 mb-4">Click a year to see that year&apos;s receipts</p>
+                    <div className="divide-y">
+                      {perYear.map(y => (
+                        <button
+                          key={y.year}
+                          onClick={() => drillIntoYear(y.year)}
+                          className="w-full py-2 text-left hover:bg-gray-50 group"
+                        >
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="font-semibold text-gray-900 group-hover:text-indigo-600 w-16">{y.year}</span>
+                            <span className="text-sm text-gray-500 whitespace-nowrap">{y.count} receipts</span>
+                            <span className="font-bold text-gray-900 w-32 text-right whitespace-nowrap">
+                              ${Math.round(y.total).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded mt-1 overflow-hidden">
+                            <div className="h-full bg-indigo-600 rounded" style={{ width: `${(y.total / maxYear) * 100}%` }} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-lg shadow p-6 overflow-x-auto">
+                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Category by year</h2>
+                    <table className="w-full text-sm min-w-[640px]">
+                      <thead>
+                        <tr className="text-gray-500 border-b">
+                          <th className="text-left pb-2 font-medium">Category</th>
+                          {shownYears.map(y => (
+                            <th key={y} className="text-right pb-2 font-medium w-24">{y}</th>
+                          ))}
+                          <th className="text-right pb-2 font-medium w-28">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {catRows.map(c => (
+                          <tr key={c.name} className="border-b last:border-b-0 hover:bg-gray-50">
+                            <td className="py-2">
+                              <button
+                                onClick={() => drillIntoCategory(c.name)}
+                                className="text-gray-900 hover:text-indigo-600 font-medium"
+                              >
+                                {c.name}
+                              </button>
+                            </td>
+                            {shownYears.map(y => {
+                              const v = c.byYear.get(y) || 0;
+                              return (
+                                <td key={y} className={`py-2 text-right ${v ? 'text-gray-900' : 'text-gray-300'}`}>
+                                  {v ? `$${Math.round(v).toLocaleString()}` : '—'}
+                                </td>
+                              );
+                            })}
+                            <td className="py-2 text-right font-semibold text-gray-900">
+                              ${Math.round(c.total).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gray-300 font-bold">
+                          <td className="py-2 text-gray-900">Total</td>
+                          {shownYears.map(y => {
+                            const v = perYear.find(p => p.year === y)?.total || 0;
+                            return <td key={y} className="py-2 text-right text-gray-900">${Math.round(v).toLocaleString()}</td>;
+                          })}
+                          <td className="py-2 text-right text-gray-900">
+                            ${Math.round(perYear.reduce((s, y) => s + y.total, 0)).toLocaleString()}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
+
             {/* Where the money went — click any row to see the receipts behind it */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white rounded-lg shadow p-6">
@@ -565,11 +711,12 @@ export default function Dashboard() {
           <div className="space-y-4">
             {/* Active filter banner — makes it obvious you arrived here from a
                 dashboard click, and how to get back to everything. */}
-            {(filterCategory || searchQuery) && (
+            {(filterCategory || searchQuery || filterYear) && (
               <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3">
                 <span className="text-sm text-indigo-900">
                   Showing <strong>{filteredReceipts.length}</strong> of {receipts.length} receipts
                   {filterCategory && <> in <strong>{filterCategory}</strong></>}
+                  {filterYear && <> from <strong>{filterYear}</strong></>}
                   {searchQuery && <> matching <strong>&ldquo;{searchQuery}&rdquo;</strong></>}
                   {' · '}
                   <strong>
@@ -577,13 +724,39 @@ export default function Dashboard() {
                   </strong>
                 </span>
                 <button
-                  onClick={() => { setFilterCategory(''); setSearchQuery(''); }}
+                  onClick={() => { setFilterCategory(''); setSearchQuery(''); setFilterYear(''); }}
                   className="ml-auto text-sm text-indigo-700 hover:text-indigo-900 underline"
                 >
                   Clear filter
                 </button>
               </div>
             )}
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setFilterYear('')}
+                className={`px-3 py-1 text-sm rounded-full border transition ${
+                  filterYear === ''
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'border-gray-300 text-gray-700 hover:border-indigo-600'
+                }`}
+              >
+                All years
+              </button>
+              {years.map(y => (
+                <button
+                  key={y}
+                  onClick={() => setFilterYear(y)}
+                  className={`px-3 py-1 text-sm rounded-full border transition ${
+                    filterYear === y
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-gray-300 text-gray-700 hover:border-indigo-600'
+                  }`}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
 
             {/* Description Modal */}
             {descriptionModal !== null && (
@@ -714,6 +887,27 @@ export default function Dashboard() {
                     Update Category
                   </button>
                 </div>
+
+                {/* Money that never actually left: a refunded flight, a cancelled
+                    booking, a failed payment. Kept as a record, not counted. */}
+                <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-blue-200">
+                  <span className="text-sm text-blue-900 font-medium">Didn&apos;t actually pay this:</span>
+                  {['Refunded', 'Cancelled', 'Failed', 'Duplicate'].map(s => (
+                    <button
+                      key={s}
+                      onClick={() => handleSetStatus(s)}
+                      className="px-3 py-1.5 text-sm rounded-lg border border-rose-300 text-rose-700 bg-white hover:bg-rose-600 hover:text-white hover:border-rose-600 transition"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => handleSetStatus('')}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-700 bg-white hover:bg-gray-100 transition ml-2"
+                  >
+                    Undo / count it again
+                  </button>
+                </div>
               </div>
             )}
 
@@ -776,7 +970,13 @@ export default function Dashboard() {
                     </tr>
                   ) : (
                     filteredReceipts.map((receipt, idx) => (
-                      <tr key={idx} className="border-b hover:bg-gray-50">
+                      <tr
+                        key={idx}
+                        className={`border-b hover:bg-gray-50 ${
+                          receipt.status ? 'text-gray-400 line-through decoration-rose-400' : ''
+                        }`}
+                        title={receipt.status ? `${receipt.status} — not counted as spend` : undefined}
+                      >
                         <td className="py-3 px-4">
                           <input
                             type="checkbox"
@@ -796,6 +996,11 @@ export default function Dashboard() {
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             <span className="font-medium">{receipt.vendor}</span>
+                            {receipt.status && (
+                              <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 no-underline">
+                                {receipt.status}
+                              </span>
+                            )}
                             <button
                               onClick={() => setRenameModal({ oldName: receipt.vendor, newName: receipt.vendor })}
                               className="text-gray-400 hover:text-indigo-600 transition"
@@ -945,6 +1150,32 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mt-4">
+                <button
+                  onClick={() => setBreakdownYear('')}
+                  className={`px-3 py-1 text-sm rounded-full border transition ${
+                    breakdownYear === ''
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-gray-300 text-gray-700 hover:border-indigo-600'
+                  }`}
+                >
+                  All years
+                </button>
+                {years.map(y => (
+                  <button
+                    key={y}
+                    onClick={() => setBreakdownYear(y)}
+                    className={`px-3 py-1 text-sm rounded-full border transition ${
+                      breakdownYear === y
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'border-gray-300 text-gray-700 hover:border-indigo-600'
+                    }`}
+                  >
+                    {y}
+                  </button>
+                ))}
               </div>
               <p className="text-3xl font-bold text-gray-900 mt-4">
                 ${Math.round(breakdown.total).toLocaleString()}

@@ -17,11 +17,20 @@ const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 //   Real estate       — property purchases (the Godrej unit). Money out, but
 //                       buying an asset, not spending. ASM: "take out godrej
 //                       real estate transactions".
+//   Family Loan       — the Bhandari loan. Tracked, but lending money to family
+//                       is not spending. ASM: "don't include but track it separately".
 export const NON_EXPENSE_CATEGORIES = [
-  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)', 'Real estate',
+  'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
+  'Real estate', 'Family Loan',
 ];
 
-export function isExpense(r: { category?: string }) {
+// Status (column O) is orthogonal to Category: a refunded flight is still
+// "Airlines", the money just came back. Anything with one of these statuses is
+// money that never actually left, so it must not count as spend.
+export const VOID_STATUSES = ['Refunded', 'Cancelled', 'Failed', 'Duplicate', 'Void'];
+
+export function isExpense(r: { category?: string; status?: string }) {
+  if (VOID_STATUSES.includes(r.status || '')) return false;
   return !NON_EXPENSE_CATEGORIES.includes(r.category || '');
 }
 
@@ -31,7 +40,7 @@ export const CATEGORIES = [
   'IT', 'Website', 'Telecom', 'Utilities', 'Insurance', 'Financial Services',
   'Professional Services', 'Shopping', 'Health', 'Education', 'Clubs & Memberships',
   'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
-  'Real estate', 'Rent', 'Home Employees', 'Donation', 'Legal',
+  'Real estate', 'Family Loan', 'Rent', 'Home Employees', 'Donation', 'Legal',
   'Conference', 'Other',
 ];
 
@@ -99,6 +108,18 @@ export async function getDuplicateGroups() {
   }
 
   return groups.sort((a, b) => b.wastedUsd - a.wastedUsd);
+}
+
+/**
+ * Marks a receipt as refunded/cancelled/failed so it stops counting as spend.
+ * Pass an empty status to undo. No email says the ANA flight was refunded, so
+ * this has to be doable by hand.
+ */
+export async function setStatus(rowIndices: number[], status: string) {
+  const requests: sheets_v4.Schema$Request[] = rowIndices.map(i =>
+    setCellRequest(i + 1, 14, status)); // column O
+  await runBatch(requests);
+  return { updated: rowIndices.length, status };
 }
 
 /** Deletes the given sheet rows (0-based data indices), bottom-up. */
@@ -265,7 +286,7 @@ export async function getAllReceipts() {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:M',
+      range: 'Sheet1!A:O',
       // Numbers as numbers (no thousands separators or currency symbols),
       // but dates still as "YYYY-MM-DD" rather than serial numbers.
       valueRenderOption: 'UNFORMATTED_VALUE',
@@ -288,6 +309,8 @@ export async function getAllReceipts() {
       usdEstimate: toNumber(row[10]),
       month: row[11] || '',
       description: row[12] || '',
+      threadId: row[13] || '',
+      status: row[14] || '',
     }));
   } catch (err) {
     console.error('Error fetching receipts:', err);

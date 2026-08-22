@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllReceipts, addReceipt, bulkUpdateCategory, deleteReceipts, renameVendor, updateDescription } from '@/lib/sheets';
+import { getAllReceipts, addReceipt, bulkUpdateCategory, deleteReceipts, renameVendor, updateDescription, setStatus, VOID_STATUSES } from '@/lib/sheets';
 import { isAuthenticated } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -38,6 +38,15 @@ export async function POST(request: NextRequest) {
       const { rowIndices, category } = data;
       await bulkUpdateCategory(rowIndices, category);
       return NextResponse.json({ success: true });
+    }
+
+    if (action === 'setStatus') {
+      const { rowIndices, status } = data;
+      if (status && !VOID_STATUSES.includes(status)) {
+        return NextResponse.json({ error: `Unknown status: ${status}` }, { status: 400 });
+      }
+      const result = await setStatus(rowIndices, status || '');
+      return NextResponse.json({ success: true, ...result });
     }
 
     if (action === 'delete') {
