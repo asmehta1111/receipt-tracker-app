@@ -1,7 +1,7 @@
 'use client';
 
 // Force rebuild
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
 
@@ -296,6 +296,26 @@ export default function Dashboard() {
     return v || '(no vendor)';
   };
 
+  // Parent companies. JW Marriott, Sheraton, W and St. Regis are all Marriott —
+  // useful summed for negotiating or points, useful separate for seeing which
+  // property. The table shows both: family total, expandable to the brands.
+  const VENDOR_GROUPS: [RegExp, string][] = [
+    [/marriott|sheraton|westin|st\.? ?regis|^w hotels|delta hotels|^element|tribute portfolio|ritz.?carlton|^aloft|four points|courtyard|fairfield|^moxy|^ac hotels|le m[eé]ridien|autograph|luxury collection|renaissance (hotel|.*resort)/i, 'Marriott group'],
+    [/hilton|doubletree|hampton inn|embassy suites|waldorf|conrad |curio |canopy by/i, 'Hilton group'],
+    [/intercontinental|holiday inn|crowne plaza|kimpton|hotel indigo|staybridge|candlewood/i, 'IHG group'],
+    [/hyatt|andaz|thompson hotels|^alila/i, 'Hyatt group'],
+    [/accor|sofitel|novotel|pullman|fairmont|raffles|swiss[oô]tel|mercure|^ibis/i, 'Accor group'],
+    [/^taj |taj hotels|ihcl|vivanta|seleqtions/i, 'Taj / IHCL'],
+    [/^google/i, 'Google'],
+    [/^amazon/i, 'Amazon'],
+    [/^(dsb|deutscher schulverein|delhi school of business|delhi public school)/i, 'DSB (Deutsche Schule Bombay)'],
+  ];
+
+  const vendorGroupOf = (canonical: string) => {
+    for (const [re, name] of VENDOR_GROUPS) if (re.test(canonical)) return name;
+    return null; // ungrouped vendors stand alone
+  };
+
   const filteredReceipts = receipts.filter(r => {
     const matchesCategory = !filterCategory || r.category === filterCategory;
     const matchesYear = !filterYear || yearOf(r) === filterYear;
@@ -538,16 +558,42 @@ export default function Dashboard() {
                 e.byYear[y] = (e.byYear[y] || 0) + (r.usdEstimate || 0);
                 e.spellings.add(r.vendor);
               }
-              const vendors = [...map.values()].filter(v => v.count > 1).sort((a, b) => b.total - a.total);
+              const vendors = [...map.values()].filter(v => v.count > 1);
               const shown = years.filter(y => vendors.some(v => v.byYear[y]));
+
+              // Roll vendors up into parent companies, keeping the brands as children.
+              const rows: any[] = [];
+              const families = new Map<string, any>();
+              for (const v of vendors) {
+                const fam = vendorGroupOf(v.name);
+                if (!fam) { rows.push({ ...v, kind: 'solo' }); continue; }
+                if (!families.has(fam)) families.set(fam, { name: fam, count: 0, total: 0, byYear: {} as any, children: [] });
+                const f = families.get(fam);
+                f.count += v.count;
+                f.total += v.total;
+                for (const y of Object.keys(v.byYear)) f.byYear[y] = (f.byYear[y] || 0) + v.byYear[y];
+                f.children.push(v);
+              }
+              for (const f of families.values()) {
+                f.children.sort((a: any, b: any) => b.total - a.total);
+                rows.push({ ...f, kind: f.children.length > 1 ? 'family' : 'solo', ...(f.children.length === 1 ? f.children[0] : {}) });
+              }
+              rows.sort((a, b) => b.total - a.total);
+
+              const cells = (v: any, bold: boolean) => shown.map(y => (
+                <td key={y} className={`py-2 text-right tabular-nums ${v.byYear[y] ? (bold ? 'text-gray-900' : 'text-gray-600') : 'text-gray-300'}`}>
+                  {v.byYear[y] ? `$${Math.round(v.byYear[y]).toLocaleString()}` : '—'}
+                </td>
+              ));
 
               return (
                 <div className="bg-white rounded-lg shadow p-6 overflow-x-auto">
                   <h2 className="text-lg font-semibold text-gray-900">Vendors billed more than once</h2>
                   <p className="text-sm text-gray-500 mb-4">
-                    {vendors.length} vendors, summed per calendar year. Click a name for its receipts.
+                    {vendors.length} vendors, summed per calendar year. Parent companies show a family
+                    total — click the arrow to see the individual brands.
                   </p>
-                  <table className="w-full text-sm min-w-[720px]">
+                  <table className="w-full text-sm min-w-[760px]">
                     <thead>
                       <tr className="text-gray-500 border-b">
                         <th className="text-left pb-2 font-medium">Vendor</th>
@@ -557,31 +603,61 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {vendors.map(v => (
-                        <tr key={v.name} className="border-b last:border-b-0 hover:bg-gray-50">
-                          <td className="py-2">
-                            <button
-                              onClick={() => drillIntoVendor([...v.spellings][0])}
-                              className="text-gray-900 hover:text-indigo-600 font-medium text-left"
-                              title={v.spellings.size > 1 ? `Merged: ${[...v.spellings].join(' · ')}` : undefined}
-                            >
-                              {v.name}
-                              {v.spellings.size > 1 && (
-                                <span className="ml-1.5 text-[10px] text-gray-400">({v.spellings.size} names)</span>
-                              )}
-                            </button>
-                          </td>
-                          <td className="py-2 text-right text-gray-500 tabular-nums">{v.count}</td>
-                          {shown.map(y => (
-                            <td key={y} className={`py-2 text-right tabular-nums ${v.byYear[y] ? 'text-gray-900' : 'text-gray-300'}`}>
-                              {v.byYear[y] ? `$${Math.round(v.byYear[y]).toLocaleString()}` : '—'}
-                            </td>
-                          ))}
-                          <td className="py-2 text-right font-semibold text-gray-900 tabular-nums">
-                            ${Math.round(v.total).toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
+                      {rows.map(v => {
+                        const open = openVendors.has('fam:' + v.name);
+                        return (
+                          <Fragment key={v.name}>
+                            <tr className="border-b hover:bg-gray-50">
+                              <td className="py-2">
+                                {v.kind === 'family' ? (
+                                  <button
+                                    onClick={() => toggle(openVendors, 'fam:' + v.name, setOpenVendors)}
+                                    className="text-gray-900 hover:text-indigo-600 font-semibold text-left"
+                                  >
+                                    <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
+                                    {v.name}
+                                    <span className="ml-1.5 text-[10px] text-gray-400">({v.children.length} brands)</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => drillIntoVendor([...(v.spellings || [v.name])][0])}
+                                    className="text-gray-900 hover:text-indigo-600 font-medium text-left pl-4"
+                                    title={v.spellings?.size > 1 ? `Merged: ${[...v.spellings].join(' · ')}` : undefined}
+                                  >
+                                    {v.name}
+                                    {v.spellings?.size > 1 && (
+                                      <span className="ml-1.5 text-[10px] text-gray-400">({v.spellings.size} names)</span>
+                                    )}
+                                  </button>
+                                )}
+                              </td>
+                              <td className="py-2 text-right text-gray-500 tabular-nums">{v.count}</td>
+                              {cells(v, true)}
+                              <td className="py-2 text-right font-semibold text-gray-900 tabular-nums">
+                                ${Math.round(v.total).toLocaleString()}
+                              </td>
+                            </tr>
+                            {v.kind === 'family' && open && v.children.map((c: any) => (
+                              <tr key={v.name + '|' + c.name} className="border-b bg-gray-50">
+                                <td className="py-1.5 pl-10">
+                                  <button
+                                    onClick={() => drillIntoVendor([...c.spellings][0])}
+                                    className="text-gray-700 hover:text-indigo-600 text-left"
+                                    title={c.spellings.size > 1 ? `Merged: ${[...c.spellings].join(' · ')}` : undefined}
+                                  >
+                                    {c.name}
+                                  </button>
+                                </td>
+                                <td className="py-1.5 text-right text-gray-500 tabular-nums">{c.count}</td>
+                                {cells(c, false)}
+                                <td className="py-1.5 text-right text-gray-700 tabular-nums">
+                                  ${Math.round(c.total).toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
