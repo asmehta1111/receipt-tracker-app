@@ -106,6 +106,28 @@ export default function Dashboard() {
     }
   }
 
+  // Marks specific rows (not the checkbox selection) as money that never left —
+  // a trip that was cancelled after booking. The card then drops out of the
+  // travel list, since voided rows aren't spend and don't need attributing.
+  async function handleSetStatusRows(rowIndices: number[], status: string) {
+    setSavingPerson(rowIndices.join(','));
+    try {
+      const res = await fetch('/api/receipts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setStatus', data: { rowIndices, status } }),
+      });
+      if (res.ok) {
+        setReceipts(prev => prev.map((r, i) => rowIndices.includes(i) ? { ...r, status } : r));
+        fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to set status:', err);
+    } finally {
+      setSavingPerson(null);
+    }
+  }
+
   async function fetchDuplicates() {
     setDupLoading(true);
     try {
@@ -1437,6 +1459,22 @@ export default function Dashboard() {
                       }`}
                     >
                       ✗ Not mine — don&apos;t count it
+                    </button>
+                    {/* A separate question from who: the trip may never have
+                        happened at all. Voids the row and drops it from this list. */}
+                    <button
+                      disabled={savingPerson === String(r.idx)}
+                      onClick={() => handleSetStatusRows([r.idx], 'Cancelled')}
+                      className="px-4 py-2 text-sm font-semibold rounded-lg border-2 border-amber-500 text-amber-700 hover:bg-amber-600 hover:text-white hover:border-amber-600 transition disabled:opacity-40"
+                    >
+                      ⊘ Cancelled — remove
+                    </button>
+                    <button
+                      disabled={savingPerson === String(r.idx)}
+                      onClick={() => handleSetStatusRows([r.idx], 'Refunded')}
+                      className="px-3 py-2 text-sm rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition disabled:opacity-40"
+                    >
+                      Refunded
                     </button>
                     {r.person && (
                       <button
