@@ -30,6 +30,14 @@ export async function POST(request: NextRequest) {
     const { action, data } = body;
 
     if (action === 'add') {
+      // Status and Person are exclusion axes, so a typo here silently changes
+      // the headline spend number. Reject unknown values rather than write them.
+      if (data?.status && !VOID_STATUSES.includes(data.status)) {
+        return NextResponse.json({ error: `Unknown status: ${data.status}` }, { status: 400 });
+      }
+      if (data?.person && !PEOPLE.includes(data.person)) {
+        return NextResponse.json({ error: `Unknown person: ${data.person}` }, { status: 400 });
+      }
       await addReceipt(data);
       return NextResponse.json({ success: true });
     }

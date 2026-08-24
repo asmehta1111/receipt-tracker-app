@@ -359,17 +359,25 @@ export async function addReceipt(receipt: any) {
       receipt.renewalDate,
       receipt.paymentMethod,
       'Manual Entry',
-      receipt.subject,
+      receipt.subject || '',
       `=IF($D${rowNum}="","",IFERROR($D${rowNum}*VLOOKUP($C${rowNum},Summary!$R$2:$S$30,2,FALSE),$D${rowNum}))`,
       `=IF(A${rowNum}="","",TEXT(A${rowNum},"YYYY-MM"))`,
       receipt.description || '',
+      // N, thread ID — a photographed receipt has no email behind it, so this
+      // stays empty and the scraper's thread-ID key can never collide with it.
+      '',
+      // O and P. The emailed rows get these set later, one tab at a time; a
+      // receipt entered by hand already knows whether it was void and who it
+      // was for, so capture that at entry rather than queueing more work.
+      receipt.status || '',
+      receipt.person || '',
     ],
   ];
 
   try {
     return await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:M',
+      range: 'Sheet1!A:P',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values },

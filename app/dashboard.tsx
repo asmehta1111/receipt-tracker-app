@@ -3,7 +3,8 @@
 // Force rebuild
 import { useState, useEffect, Fragment } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { LogOut, Plus, Edit2, Trash2, Filter, Search, X } from 'lucide-react';
+import { LogOut, Plus, Edit2, Trash2, Filter, Search, X, Camera } from 'lucide-react';
+import AddReceipt from './add-receipt';
 
 // Deep, high-saturation hues that stay distinguishable with red-green colour
 // vision deficiency — blue / indigo / teal / orange / rose, never two neighbours.
@@ -17,7 +18,11 @@ export default function Dashboard() {
   const [receipts, setReceipts] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  // Arriving from the Android share sheet means a photo is already waiting in
+  // Cache Storage, so land on Add rather than making the user find the tab.
+  const [activeTab, setActiveTab] = useState(() =>
+    typeof window !== 'undefined' && window.location.search.includes('shared')
+      ? 'add' : 'dashboard');
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [filterCategory, setFilterCategory] = useState('');
   const [bulkCategory, setBulkCategory] = useState('');
@@ -542,7 +547,20 @@ export default function Dashboard() {
       {/* Navigation */}
       <nav className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-6">
-          <div className="flex gap-8">
+          {/* Scrolls sideways on a phone — this app is now used one-handed to
+              photograph a bill, so the tabs must not wrap into a stack. */}
+          <div className="flex gap-8 overflow-x-auto whitespace-nowrap">
+            <button
+              onClick={() => setActiveTab('add')}
+              className={`py-4 px-2 border-b-2 font-medium transition flex items-center gap-2 ${
+                activeTab === 'add'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Camera size={18} />
+              Add receipt
+            </button>
             <button
               onClick={() => setActiveTab('dashboard')}
               className={`py-4 px-2 border-b-2 font-medium transition ${
@@ -634,6 +652,13 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {activeTab === 'add' && (
+          <AddReceipt
+            onSaved={fetchData}
+            inUseCategories={Array.from(new Set(receipts.map((r: any) => r.category).filter(Boolean)))}
+          />
+        )}
+
         {activeTab === 'dashboard' && analytics && (
           <div className="space-y-8">
             {/* KPIs */}

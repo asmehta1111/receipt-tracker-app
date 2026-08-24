@@ -7,3 +7,4 @@ build/
 .env.local.bak
 .DS_Store
 tsconfig.tsbuildinfo
+.claude/
