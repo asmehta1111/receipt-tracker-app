@@ -372,10 +372,13 @@ export default function Dashboard() {
   // donation) into United Airlines, and "Deutsche Bahn" into the school.
   const VENDOR_ALIASES: [RegExp, string][] = [
     [/^(rbyc\b|royal bombay)/i, 'Royal Bombay Yacht Club'],
-    // DSB = Deutsche Schule Bombay. Claude has variously guessed "Delhi School
-    // of Business" and "Delhi Public School" — all the same school.
-    [/^(dsb\b|dsbindia|dsb india|delhi school of business|delhi public school|deutscher schulverein)/i,
-      'DSB (Deutsche Schule Bombay)'],
+    // The kids' school, the German school in Bombay. Claude has guessed "Delhi
+    // School of Business", "Delhi Public School", "DSB India" and "dsbindia" —
+    // fourteen spellings, all one place. Matched on the full distinguishing
+    // phrase, never a first word: "Deutsches Museum" and "Deutsche Bahn" open
+    // the same way and are not the school.
+    [/^(dsb\b|dsbindia|delhi school of business|delhi public school|deutsche[rs]? schulverein|deutsche schule bombay)/i,
+      'Deutsche Schulverein Bombay'],
     [/^united airlines/i, 'United Airlines'],
     [/^american airlines/i, 'American Airlines'],
     [/^marriott\b/i, 'Marriott Hotels'],
@@ -728,6 +731,94 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
+
+            {/* Year by year. The KPI above is a five-year lump, which hides the
+                only thing anyone actually wants to know: whether this year is
+                heavier than last. Counted rows only — same three exclusion axes
+                as the total, so these columns add up to it. */}
+            {(() => {
+              const counted = receipts.filter(r =>
+                !nonExpense.includes(r.category)
+                && !VOID_STATUSES_CLIENT.includes(r.status || '')
+                && !NON_HOUSEHOLD_CLIENT.includes(r.person || ''));
+
+              const stats = years.map(y => {
+                const rs = counted.filter(r => yearOf(r) === y);
+                const total = rs.reduce((a, r) => a + (r.usdEstimate || 0), 0);
+                const cats = new Map<string, number>();
+                for (const r of rs) {
+                  cats.set(r.category || 'Other', (cats.get(r.category || 'Other') || 0) + (r.usdEstimate || 0));
+                }
+                const top = [...cats.entries()].sort((a, b) => b[1] - a[1])[0];
+                return { year: y, total, count: rs.length, top };
+              }).filter(s => s.count > 0);
+
+              if (!stats.length) return null;
+              const peak = Math.max(...stats.map(s => s.total));
+              const grand = stats.reduce((a, s) => a + s.total, 0);
+              // Oldest year first for the run-rate note; `years` is newest-first.
+              const chron = [...stats].reverse();
+              const complete = chron.filter(s => s.year !== String(new Date().getFullYear()));
+              const avg = complete.length
+                ? complete.reduce((a, s) => a + s.total, 0) / complete.length : 0;
+              const thisYear = stats.find(s => s.year === String(new Date().getFullYear()));
+
+              return (
+                <div className="bg-white rounded-lg shadow p-6">
+                  <div className="flex items-baseline justify-between gap-4 mb-1">
+                    <h2 className="text-lg font-semibold text-gray-900">Year by year</h2>
+                    <span className="text-sm text-gray-500">
+                      ${Math.round(grand).toLocaleString()} across {stats.length} years
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 mb-5">
+                    {avg > 0 && (
+                      <>Averaging <strong className="text-gray-700">${Math.round(avg).toLocaleString()}</strong> a
+                      year over {complete.length} complete {complete.length === 1 ? 'year' : 'years'}
+                      {thisYear && (
+                        <> — {new Date().getFullYear()} is at ${Math.round(thisYear.total).toLocaleString()},
+                        {' '}{thisYear.total >= avg ? 'above' : 'below'} that pace</>
+                      )}.</>
+                    )}
+                  </p>
+
+                  <div className="space-y-3">
+                    {stats.map(s => {
+                      // Change against the previous calendar year, where there is one.
+                      const idx = chron.findIndex(c => c.year === s.year);
+                      const prev = idx > 0 ? chron[idx - 1] : null;
+                      const delta = prev && prev.total > 0
+                        ? ((s.total - prev.total) / prev.total) * 100 : null;
+                      return (
+                        <div key={s.year}>
+                          <div className="flex items-baseline justify-between gap-3 mb-1">
+                            <span className="font-medium text-gray-900 w-14">{s.year}</span>
+                            <span className="text-xs text-gray-500 flex-1 truncate">
+                              {s.count} rows{s.top ? ` · mostly ${s.top[0]}` : ''}
+                            </span>
+                            {/* Direction is spelled out, never carried by colour alone. */}
+                            {delta !== null && (
+                              <span className={`text-xs whitespace-nowrap ${delta >= 0 ? 'text-rose-700' : 'text-teal-700'}`}>
+                                {delta >= 0 ? '▲ up' : '▼ down'} {Math.abs(delta).toFixed(0)}%
+                              </span>
+                            )}
+                            <span className="font-semibold text-gray-900 w-28 text-right tabular-nums">
+                              ${Math.round(s.total).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded overflow-hidden">
+                            <div
+                              className="h-full bg-indigo-500 rounded"
+                              style={{ width: `${peak > 0 ? (s.total / peak) * 100 : 0}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Every vendor billed more than once, summed per calendar year.
                 Vendor spellings are merged first (see VENDOR_ALIASES) or a

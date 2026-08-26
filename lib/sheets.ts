@@ -22,6 +22,10 @@ const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID!;
 export const NON_EXPENSE_CATEGORIES = [
   'Investments', 'Card Payments', 'Internal Transfers', 'Business (BLIF/AMA)',
   'Real estate', 'Family Loan',
+  // Entity-level costs of the family office — accounting, filings and annual fees
+  // for the holding companies. Real money, but not personal spend. Separate from
+  // BLIF/AMA because the family holding entities are not the fund.
+  'Family Office',
 ];
 
 // Status (column O) is orthogonal to Category: a refunded flight is still
