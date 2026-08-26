@@ -18,6 +18,10 @@ export default function Dashboard() {
   const [receipts, setReceipts] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Which year in the year-by-year panel is opened out. One at a time — the
+  // point of the panel is comparing years, and several expanded at once buries
+  // the comparison under its own detail.
+  const [openYear, setOpenYear] = useState<string | null>(null);
   // Arriving from the Android share sheet means a photo is already waiting in
   // Cache Storage, so land on Add rather than making the user find the tab.
   const [activeTab, setActiveTab] = useState(() =>
@@ -789,29 +793,46 @@ export default function Dashboard() {
                       const prev = idx > 0 ? chron[idx - 1] : null;
                       const delta = prev && prev.total > 0
                         ? ((s.total - prev.total) / prev.total) * 100 : null;
+                      const isOpen = openYear === s.year;
                       return (
                         <div key={s.year}>
-                          <div className="flex items-baseline justify-between gap-3 mb-1">
-                            <span className="font-medium text-gray-900 w-14">{s.year}</span>
-                            <span className="text-xs text-gray-500 flex-1 truncate">
-                              {s.count} rows{s.top ? ` · mostly ${s.top[0]}` : ''}
-                            </span>
-                            {/* Direction is spelled out, never carried by colour alone. */}
-                            {delta !== null && (
-                              <span className={`text-xs whitespace-nowrap ${delta >= 0 ? 'text-rose-700' : 'text-teal-700'}`}>
-                                {delta >= 0 ? '▲ up' : '▼ down'} {Math.abs(delta).toFixed(0)}%
+                          <button
+                            onClick={() => setOpenYear(isOpen ? null : s.year)}
+                            className="w-full text-left group"
+                            aria-expanded={isOpen}
+                          >
+                            <div className="flex items-baseline justify-between gap-3 mb-1">
+                              <span className="font-medium text-gray-900 w-14 group-hover:text-indigo-600">
+                                <span className="inline-block w-3 text-gray-400">{isOpen ? '▾' : '▸'}</span>
+                                {s.year}
                               </span>
-                            )}
-                            <span className="font-semibold text-gray-900 w-28 text-right tabular-nums">
-                              ${Math.round(s.total).toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="h-2 bg-gray-100 rounded overflow-hidden">
-                            <div
-                              className="h-full bg-indigo-500 rounded"
-                              style={{ width: `${peak > 0 ? (s.total / peak) * 100 : 0}%` }}
-                            />
-                          </div>
+                              <span className="text-xs text-gray-500 flex-1 truncate">
+                                {s.count} rows{s.top ? ` · mostly ${s.top[0]}` : ''}
+                              </span>
+                              {/* Direction is spelled out, never carried by colour alone. */}
+                              {delta !== null && (
+                                <span className={`text-xs whitespace-nowrap ${delta >= 0 ? 'text-rose-700' : 'text-teal-700'}`}>
+                                  {delta >= 0 ? '▲ up' : '▼ down'} {Math.abs(delta).toFixed(0)}%
+                                </span>
+                              )}
+                              <span className="font-semibold text-gray-900 w-28 text-right tabular-nums">
+                                ${Math.round(s.total).toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="h-2 bg-gray-100 rounded overflow-hidden">
+                              <div
+                                className={`h-full rounded ${isOpen ? 'bg-indigo-600' : 'bg-indigo-500 group-hover:bg-indigo-600'}`}
+                                style={{ width: `${peak > 0 ? (s.total / peak) * 100 : 0}%` }}
+                              />
+                            </div>
+                          </button>
+                          {isOpen && <YearDetail
+                            year={s.year}
+                            rows={counted.filter(r => yearOf(r) === s.year)}
+                            total={s.total}
+                            canonicalVendor={canonicalVendor}
+                            onVendor={drillIntoVendor}
+                          />}
                         </div>
                       );
                     })}
@@ -2283,6 +2304,116 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+/**
+ * What one year was actually made of, opened out under its bar.
+ *
+ * Three questions, in the order they get asked: where did it go (categories),
+ * who took it (vendors, clickable through to the rows), and when did it happen
+ * (months, which is what exposes a lumpy year like school fees or one big trip).
+ */
+function YearDetail({ year, rows, total, canonicalVendor, onVendor }: {
+  year: string;
+  rows: any[];
+  total: number;
+  canonicalVendor: (v: string) => string;
+  onVendor: (v: string) => void;
+}) {
+  const sumBy = (key: (r: any) => string) => {
+    const m = new Map<string, { total: number; count: number }>();
+    for (const r of rows) {
+      const k = key(r) || 'Other';
+      const e = m.get(k) || { total: 0, count: 0 };
+      e.total += r.usdEstimate || 0;
+      e.count += 1;
+      m.set(k, e);
+    }
+    return [...m.entries()].sort((a, b) => b[1].total - a[1].total);
+  };
+
+  const categories = sumBy(r => r.category);
+  const vendors = sumBy(r => canonicalVendor(r.vendor)).slice(0, 8);
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthly = MONTHS.map((label, i) => {
+    const inMonth = rows.filter(r => String(r.date || '').slice(5, 7) === String(i + 1).padStart(2, '0'));
+    return { label, total: inMonth.reduce((a, r) => a + (r.usdEstimate || 0), 0), count: inMonth.length };
+  });
+  const monthPeak = Math.max(...monthly.map(m => m.total), 1);
+  const busiest = [...monthly].sort((a, b) => b.total - a.total)[0];
+  const active = monthly.filter(m => m.count > 0).length;
+
+  const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
+  const share = (n: number) => (total > 0 ? `${((n / total) * 100).toFixed(0)}%` : '0%');
+
+  return (
+    <div className="mt-3 mb-5 ml-4 pl-4 border-l-2 border-indigo-100">
+      <p className="text-sm text-gray-500 mb-4">
+        {money(total)} over {rows.length} rows in {active} active {active === 1 ? 'month' : 'months'}
+        {busiest.total > 0 && <> · heaviest was {busiest.label} at {money(busiest.total)}</>}
+        {active > 0 && <> · {money(total / active)} a month on average</>}
+      </p>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            Where it went
+          </h3>
+          <div className="space-y-1.5">
+            {categories.map(([name, v]) => (
+              <div key={name} className="flex items-baseline gap-2 text-sm">
+                <span className="w-40 truncate text-gray-700">{name}</span>
+                <div className="flex-1 h-1.5 bg-gray-100 rounded overflow-hidden min-w-[2rem]">
+                  <div className="h-full bg-indigo-400 rounded"
+                    style={{ width: `${categories[0][1].total > 0 ? (v.total / categories[0][1].total) * 100 : 0}%` }} />
+                </div>
+                <span className="w-10 text-right text-xs text-gray-400 tabular-nums">{share(v.total)}</span>
+                <span className="w-20 text-right font-medium text-gray-900 tabular-nums">{money(v.total)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            Who took it
+          </h3>
+          <div className="space-y-1.5">
+            {vendors.map(([name, v]) => (
+              <button key={name} onClick={() => onVendor(name)}
+                className="w-full flex items-baseline gap-2 text-sm text-left hover:bg-gray-50 rounded px-1 -mx-1 group">
+                <span className="w-44 truncate text-gray-700 group-hover:text-indigo-600">{name}</span>
+                <span className="flex-1 text-xs text-gray-400">{v.count} {v.count === 1 ? 'row' : 'rows'}</span>
+                <span className="w-20 text-right font-medium text-gray-900 tabular-nums">{money(v.total)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mt-6 mb-2">
+        Across {year}
+      </h3>
+      {/* Fixed twelve months, so a gap reads as a quiet month rather than being
+          silently collapsed away. */}
+      <div className="flex items-end gap-1 h-20">
+        {monthly.map(m => (
+          <div key={m.label} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+            <div className="w-full bg-indigo-400 rounded-t transition-colors group-hover:bg-indigo-600"
+              style={{ height: `${(m.total / monthPeak) * 100}%`, minHeight: m.total > 0 ? '2px' : '0' }} />
+            <span className="text-[10px] text-gray-400 mt-1">{m.label}</span>
+            {m.total > 0 && (
+              <span className="absolute -top-5 hidden group-hover:block text-[10px] font-medium
+                text-gray-900 bg-white border border-gray-200 rounded px-1 whitespace-nowrap z-10">
+                {money(m.total)}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
