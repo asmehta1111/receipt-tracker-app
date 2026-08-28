@@ -309,7 +309,10 @@ export async function getAllReceipts() {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:P',
+      // Must span the full width, including Q (Passengers) — see the same
+      // warning in receipt-scraper.js's getExistingRows about a too-narrow
+      // read silently discarding a column on the next write.
+      range: 'Sheet1!A:Q',
       // Numbers as numbers (no thousands separators or currency symbols),
       // but dates still as "YYYY-MM-DD" rather than serial numbers.
       valueRenderOption: 'UNFORMATTED_VALUE',
@@ -335,6 +338,7 @@ export async function getAllReceipts() {
       threadId: row[13] || '',
       status: row[14] || '',
       person: row[15] || '',
+      passengers: row[16] || '',
     }));
   } catch (err) {
     console.error('Error fetching receipts:', err);

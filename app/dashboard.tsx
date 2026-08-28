@@ -1898,7 +1898,27 @@ export default function Dashboard() {
                             {r.person}
                           </span>
                         )}
+                        {gmailSourceLink(r) && (
+                          <a
+                            href={gmailSourceLink(r)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-gray-400 hover:text-indigo-600 transition"
+                            title="Open the original email in Gmail — passenger names, PNR, price breakdown"
+                          >
+                            <Mail size={14} />
+                          </a>
+                        )}
                       </div>
+                      {/* Passenger names read straight from the source email, not the
+                          AI-written description — that description can be wrong (see
+                          the Qatar Airways case), so this is the field to trust first. */}
+                      {r.passengers && (
+                        <p className="text-sm mt-1">
+                          <span className="text-xs font-semibold text-teal-800 uppercase tracking-wide">Passengers: </span>
+                          <span className="text-gray-800">{r.passengers}</span>
+                        </p>
+                      )}
                       {/* The description carries route, dates and passengers — the
                           whole point of this screen, so it leads. */}
                       <p className="text-gray-800 mt-1.5">{r.description || r.subject}</p>
