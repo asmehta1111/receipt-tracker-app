@@ -3,7 +3,7 @@
 // Force rebuild
 import { useState, useEffect, Fragment } from 'react';
 import { PieChart, Pie, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { LogOut, Plus, Edit2, Trash2, Filter, Search, X, Camera } from 'lucide-react';
+import { LogOut, Plus, Edit2, Trash2, Filter, Search, X, Camera, Mail } from 'lucide-react';
 import AddReceipt from './add-receipt';
 
 // Deep, high-saturation hues that stay distinguishable with red-green colour
@@ -91,6 +91,16 @@ export default function Dashboard() {
     setFilterYear(year);
     setActiveTab('receipts');
     window.scrollTo({ top: 0 });
+  }
+
+  // Every scraped row carries the Gmail thread it came from. Linking straight
+  // to that thread is more reliable than any field we could extract from it —
+  // it shows the actual PNR, passenger names, price breakdown and any attached
+  // receipt/PDF exactly as the vendor sent it, for self-auditing an amount.
+  function gmailSourceLink(receipt: { threadId?: string; emailAccount?: string }) {
+    if (!receipt.threadId) return null;
+    const authuser = receipt.emailAccount ? `?authuser=${encodeURIComponent(receipt.emailAccount)}` : '';
+    return `https://mail.google.com/mail/${authuser}#all/${receipt.threadId}`;
   }
 
   // Household counts as ASM's spending; anyone else does not, even when the
@@ -1462,12 +1472,13 @@ export default function Dashboard() {
                     <th className="py-3 px-4 text-left font-medium text-gray-900">Category</th>
                     <th className="py-3 px-4 text-left font-medium text-gray-900">Description</th>
                     <th className="py-3 px-4 text-left font-medium text-gray-900">Subscription</th>
+                    <th className="py-3 px-4 text-left font-medium text-gray-900">Source</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredReceipts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-gray-500">
+                      <td colSpan={7} className="py-8 text-center text-gray-500">
                         No receipts found
                       </td>
                     </tr>
@@ -1498,7 +1509,7 @@ export default function Dashboard() {
                         <td className="py-3 px-4">{receipt.date}</td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
-                            <span className="font-medium">{receipt.vendor}</span>
+                            <span className="font-medium" title={receipt.subject || undefined}>{receipt.vendor}</span>
                             {receipt.status && (
                               <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 no-underline">
                                 {receipt.status}
@@ -1512,6 +1523,9 @@ export default function Dashboard() {
                               <Edit2 size={16} />
                             </button>
                           </div>
+                          {receipt.subject && (
+                            <div className="text-xs text-gray-400 truncate max-w-[220px]">{receipt.subject}</div>
+                          )}
                         </td>
                         <td className="py-3 px-4">{receipt.currency} {receipt.amount.toFixed(2)}</td>
                         <td className="py-3 px-4">{receipt.category}</td>
@@ -1530,6 +1544,23 @@ export default function Dashboard() {
                           </div>
                         </td>
                         <td className="py-3 px-4">{receipt.isSubscription === 'Yes' ? '✓' : '-'}</td>
+                        <td className="py-3 px-4">
+                          {gmailSourceLink(receipt) ? (
+                            <a
+                              href={gmailSourceLink(receipt)!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-gray-400 hover:text-indigo-600 transition inline-flex"
+                              title="Open the original email in Gmail — PNR, passengers, price breakdown, attached receipt"
+                            >
+                              <Mail size={16} />
+                            </a>
+                          ) : (
+                            <span className="text-gray-300" title="No linked email for this row">
+                              <Mail size={16} />
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))
                   )}
