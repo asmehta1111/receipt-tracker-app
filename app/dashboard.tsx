@@ -57,6 +57,7 @@ export default function Dashboard() {
   const [reconcileSide, setReconcileSide] = useState<'chargesNoReceipt' | 'receiptsNoCharge'>('chargesNoReceipt');
   const [travelFilter, setTravelFilter] = useState<'unassigned' | 'all'>('unassigned');
   const [travelView, setTravelView] = useState<'trips' | 'items'>('trips');
+  const [travelSearch, setTravelSearch] = useState('');
   const [openTrips, setOpenTrips] = useState<Set<string>>(new Set());
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
@@ -439,6 +440,7 @@ export default function Dashboard() {
     const matchesSearch = !searchQuery ||
       r.vendor.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.date.includes(searchQuery) ||
       r.category.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesYear && matchesSearch;
@@ -451,11 +453,21 @@ export default function Dashboard() {
   const nonExpense: string[] = analytics?.nonExpenseCategories || [];
 
   const TRAVEL_CATEGORIES = ['Airlines', 'Hotels', 'Travel', 'Transportation'];
-  const travelRows = receipts
+  const allTravelRows = receipts
     .map((r, i) => ({ ...r, idx: i }))
     .filter(r => TRAVEL_CATEGORIES.includes(r.category)
       && !VOID_STATUSES_CLIENT.includes(r.status || '')
       && !nonExpense.includes(r.category));
+  // Name, route, vendor or date — whatever's on screen for a trip, so a search
+  // narrows the same 80/150-row-capped lists below instead of only scrolling them.
+  const travelRows = !travelSearch ? allTravelRows : allTravelRows.filter(r => {
+    const q = travelSearch.toLowerCase();
+    return r.vendor.toLowerCase().includes(q)
+      || (r.description || '').toLowerCase().includes(q)
+      || (r.subject || '').toLowerCase().includes(q)
+      || (r.person || '').toLowerCase().includes(q)
+      || r.date.includes(travelSearch);
+  });
   const unassignedTravel = travelRows.filter(r => !r.person);
 
   // Flights and hotels a few days apart are almost always one trip for the same
@@ -1688,6 +1700,16 @@ export default function Dashboard() {
                     Flights and hotels are often booked under your name for someone else. The route
                     and dates are shown so you can judge each one.
                   </p>
+                  <div className="relative mt-3 max-w-xs">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search vendor, route, person, date..."
+                      value={travelSearch}
+                      onChange={(e) => setTravelSearch(e.target.value)}
+                      className="pl-9 pr-3 py-2 w-full border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
