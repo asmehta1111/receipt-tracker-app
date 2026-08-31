@@ -511,11 +511,14 @@ export default function Dashboard() {
   // Category -> vendor -> receipts, computed client-side so drilling is instant.
   const breakdown = (() => {
     const scoped = receipts.filter(r => {
-      // A cancelled/refunded/duplicate/void row is just as "not counted" as one
-      // in a non-expense category — this used to only check category, so a
-      // cancelled flight (status set correctly on the row) still showed up
-      // under "Expenses" and inflated every total on this tab.
-      const excluded = nonExpense.includes(r.category) || VOID_STATUSES_CLIENT.includes(r.status || '');
+      // A cancelled/refunded/duplicate/void row, or one attributed to someone
+      // outside the household, is just as "not counted" as one in a non-expense
+      // category — this used to only check category, so a cancelled flight
+      // (status set correctly on the row) still showed up under "Expenses" and
+      // inflated every total on this tab. Mirrors isExpense() in lib/sheets.ts.
+      const excluded = nonExpense.includes(r.category)
+        || VOID_STATUSES_CLIENT.includes(r.status || '')
+        || NON_HOUSEHOLD.includes(r.person || '');
       const inScope = breakdownScope === 'all' ? true : breakdownScope === 'excluded' ? excluded : !excluded;
       return inScope && (!breakdownYear || yearOf(r) === breakdownYear);
     });
