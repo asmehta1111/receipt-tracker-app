@@ -65,6 +65,15 @@ export async function GET(request: NextRequest) {
     const runwayMonths = inCredit ? Math.abs(amountDue) / avgRecent : 0;
     const needsTopUp = !inCredit || runwayMonths < RUNWAY_WARN_MONTHS;
 
+    // This Summary tab is a one-time build from Gmail PDFs, not a live sync — a new
+    // invoice only appears here if someone re-runs the build script. A normal invoice
+    // lag is about one month behind "now"; more than that means the sheet itself has
+    // gone stale, and the runway figure below is computed from an old statement.
+    const [py, pm] = period.split('-').map(Number);
+    const now = new Date();
+    const monthsBehind = (now.getUTCFullYear() - py) * 12 + (now.getUTCMonth() + 1 - pm);
+    const stale = monthsBehind > 2;
+
     return NextResponse.json({
       period,
       amountDue: Math.round(amountDue * 100) / 100,
@@ -73,6 +82,8 @@ export async function GET(request: NextRequest) {
       runwayMonths: Math.round(runwayMonths * 10) / 10,
       until: inCredit ? untilLabel(period, runwayMonths) : null,
       needsTopUp,
+      stale,
+      monthsBehind,
     });
   } catch (err) {
     console.error('RBYC runway check error:', err);
