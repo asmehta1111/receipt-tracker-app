@@ -511,7 +511,11 @@ export default function Dashboard() {
   // Category -> vendor -> receipts, computed client-side so drilling is instant.
   const breakdown = (() => {
     const scoped = receipts.filter(r => {
-      const excluded = nonExpense.includes(r.category);
+      // A cancelled/refunded/duplicate/void row is just as "not counted" as one
+      // in a non-expense category — this used to only check category, so a
+      // cancelled flight (status set correctly on the row) still showed up
+      // under "Expenses" and inflated every total on this tab.
+      const excluded = nonExpense.includes(r.category) || VOID_STATUSES_CLIENT.includes(r.status || '');
       const inScope = breakdownScope === 'all' ? true : breakdownScope === 'excluded' ? excluded : !excluded;
       return inScope && (!breakdownYear || yearOf(r) === breakdownYear);
     });
@@ -2250,9 +2254,21 @@ export default function Dashboard() {
                                 <table className="w-full text-sm">
                                   <tbody>
                                     {v.rows.map((r: any, i: number) => (
-                                      <tr key={i} className="border-t border-gray-100">
+                                      <tr key={i} className="border-t border-gray-100 align-top">
                                         <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap w-24">{r.date}</td>
-                                        <td className="py-1.5 pr-3 text-gray-700">{r.subject}</td>
+                                        <td className="py-1.5 pr-3 text-gray-700">
+                                          {/* The subject alone is often generic ("Your Electronic
+                                              Receipt") — the description says what it actually was. */}
+                                          <div>{r.description || r.subject}</div>
+                                          {r.description && r.description !== r.subject && (
+                                            <div className="text-xs text-gray-400">{r.subject}</div>
+                                          )}
+                                          {r.status && (
+                                            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">
+                                              {r.status}
+                                            </span>
+                                          )}
+                                        </td>
                                         <td className="py-1.5 pr-3 text-gray-500 whitespace-nowrap w-32">
                                           {r.emailAccount?.split('@')[0]}
                                         </td>
@@ -2260,6 +2276,23 @@ export default function Dashboard() {
                                           {r.currency} {r.amount?.toLocaleString()}
                                           {r.currency !== 'USD' && (
                                             <span className="text-gray-400"> (${Math.round(r.usdEstimate).toLocaleString()})</span>
+                                          )}
+                                        </td>
+                                        <td className="py-1.5 pl-2 text-right w-8">
+                                          {gmailSourceLink(r) ? (
+                                            <a
+                                              href={gmailSourceLink(r)!}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="text-gray-400 hover:text-indigo-600 transition inline-flex"
+                                              title="Open the original email in Gmail"
+                                            >
+                                              <Mail size={14} />
+                                            </a>
+                                          ) : (
+                                            <span className="text-gray-300" title="No linked email for this row">
+                                              <Mail size={14} />
+                                            </span>
                                           )}
                                         </td>
                                       </tr>
