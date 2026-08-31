@@ -58,6 +58,7 @@ export default function Dashboard() {
   const [travelFilter, setTravelFilter] = useState<'unassigned' | 'all'>('unassigned');
   const [travelView, setTravelView] = useState<'trips' | 'items'>('trips');
   const [travelSearch, setTravelSearch] = useState('');
+  const [otherSearch, setOtherSearch] = useState('');
   const [openTrips, setOpenTrips] = useState<Set<string>>(new Set());
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
@@ -641,6 +642,16 @@ export default function Dashboard() {
                   {unassignedTravel.length}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => setActiveTab('other')}
+              className={`py-4 px-2 border-b-2 font-medium transition ${
+                activeTab === 'other'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Other
             </button>
             <button
               onClick={() => { setActiveTab('reconcile'); if (!reconcile) fetchReconcile(); }}
@@ -1588,6 +1599,102 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {activeTab === 'other' && (() => {
+          // Everyone who isn't the household — Rob Mullin, Arjun/Arijay/Anjali
+          // (Anurag's kids), Vandana, Soham, etc. Purely for occasional spot-
+          // checking; NEVER folded into any total or filter elsewhere.
+          const otherRows = receipts
+            .map((r: any, i: number) => ({ ...r, idx: i }))
+            .filter((r: any) => NON_HOUSEHOLD.includes(r.person || ''))
+            .filter((r: any) => {
+              if (!otherSearch) return true;
+              const q = otherSearch.toLowerCase();
+              return r.vendor.toLowerCase().includes(q)
+                || (r.description || '').toLowerCase().includes(q)
+                || (r.passengers || '').toLowerCase().includes(q)
+                || (r.person || '').toLowerCase().includes(q);
+            })
+            .sort((a: any, b: any) => (b.date || '').localeCompare(a.date || ''));
+          return (
+            <div className="space-y-4">
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-xl font-semibold text-gray-900">Other</h2>
+                <p className="text-gray-600 mt-1">
+                  Everyone attributed away from the household — Rob Mullin, Arjun/Arijay/Anjali,
+                  Vandana, Soham, and anyone else marked Brother / Parents / Someone else. This
+                  list is for spot-checking only; nothing here is counted in any total, chart, or
+                  filter anywhere else in the app.
+                </p>
+                <div className="relative mt-3 max-w-xs">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search vendor, name, description..."
+                    value={otherSearch}
+                    onChange={(e) => setOtherSearch(e.target.value)}
+                    className="pl-9 pr-3 py-2 w-full border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <p className="text-sm text-gray-500 mt-3">{otherRows.length} receipts</p>
+              </div>
+
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-100 border-b">
+                    <tr>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Date</th>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Vendor</th>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Category</th>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Who</th>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Description</th>
+                      <th className="py-3 px-4 text-right font-medium text-gray-900">Amount</th>
+                      <th className="py-3 px-4 text-left font-medium text-gray-900">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {otherRows.length === 0 ? (
+                      <tr><td colSpan={7} className="py-8 text-center text-gray-500">No receipts found</td></tr>
+                    ) : otherRows.slice(0, 300).map((r: any) => (
+                      <tr key={r.idx} className="border-t border-gray-100">
+                        <td className="py-2 px-4 whitespace-nowrap text-gray-500">{r.date}</td>
+                        <td className="py-2 px-4 font-medium">{r.vendor}</td>
+                        <td className="py-2 px-4 text-gray-600">{r.category}</td>
+                        <td className="py-2 px-4">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded bg-rose-100 text-rose-700">
+                            {r.person}
+                          </span>
+                        </td>
+                        <td className="py-2 px-4 text-gray-600 max-w-xs truncate" title={r.description || r.subject}>
+                          {r.passengers && <span className="text-teal-800 font-medium">{r.passengers}: </span>}
+                          {r.description || r.subject}
+                        </td>
+                        <td className="py-2 px-4 text-right whitespace-nowrap">
+                          {r.currency} {r.amount?.toLocaleString()}
+                        </td>
+                        <td className="py-2 px-4">
+                          {gmailSourceLink(r) ? (
+                            <a href={gmailSourceLink(r)!} target="_blank" rel="noopener noreferrer"
+                              className="text-gray-400 hover:text-indigo-600 transition inline-flex">
+                              <Mail size={14} />
+                            </a>
+                          ) : (
+                            <span className="text-gray-300"><Mail size={14} /></span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {otherRows.length > 300 && (
+                  <p className="text-xs text-gray-400 text-center py-3">
+                    Showing first 300 of {otherRows.length} — narrow with search to see more.
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {activeTab === 'reconcile' && (
           <div className="space-y-4">
