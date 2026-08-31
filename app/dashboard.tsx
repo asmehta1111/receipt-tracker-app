@@ -2266,6 +2266,12 @@ export default function Dashboard() {
                                           {r.description && r.description !== r.subject && (
                                             <div className="text-xs text-gray-400">{r.subject}</div>
                                           )}
+                                          {r.passengers && (
+                                            <div className="text-xs text-teal-800">
+                                              <span className="font-semibold uppercase tracking-wide">Passengers: </span>
+                                              {r.passengers}
+                                            </div>
+                                          )}
                                           {r.status && (
                                             <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">
                                               {r.status}
