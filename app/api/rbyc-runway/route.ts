@@ -35,13 +35,17 @@ export async function GET(request: NextRequest) {
 
   try {
     const sheets = await getSheets();
-    const res = await sheets.spreadsheets.values.get({
+    const batch = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: RBYC_SHEET_ID,
-      range: 'Summary!A5:K1000', // row 4 is the header; data starts row 5
+      ranges: [
+        'Summary!A5:K1000', // row 4 is the header; data starts row 5
+        'Advance Payments!A2:C1000', // Date, Vendor, Amount — row 1 is the header
+      ],
       valueRenderOption: 'UNFORMATTED_VALUE',
       dateTimeRenderOption: 'FORMATTED_STRING',
     });
-    const rows = (res.data.values || []).filter(r => r[0]); // drop trailing blanks
+    const [summaryRange, advanceRange] = batch.data.valueRanges || [];
+    const rows = (summaryRange?.values || []).filter(r => r[0]); // drop trailing blanks
     if (!rows.length) {
       return NextResponse.json({ error: 'No rows found in Summary tab' }, { status: 502 });
     }
@@ -61,15 +65,28 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const inCredit = amountDue < 0;
-    const runwayMonths = inCredit ? Math.abs(amountDue) / avgRecent : 0;
+    // Advance payments dated after the latest statement's coverage haven't been
+    // folded into any invoice's balance yet — the Summary tab only updates when
+    // someone rebuilds it from a new PDF. Fold them in here so the runway number
+    // doesn't understate a top-up you already made. A payment IS reflected once a
+    // later statement exists, so only count ones after the month following the
+    // latest period (e.g. period 2026-07 -> only payments from 2026-08 onward).
+    const [py, pm] = period.split('-').map(Number);
+    const reflectedThrough = `${pm === 12 ? py + 1 : py}-${String(pm === 12 ? 1 : pm + 1).padStart(2, '0')}`;
+    const advanceRows = advanceRange?.values || [];
+    const unreflectedPayments = advanceRows
+      .filter(r => r[0] && String(r[0]).slice(0, 7) >= reflectedThrough)
+      .reduce((a, r) => a + (Number(r[2]) || 0), 0);
+
+    const adjustedAmountDue = amountDue - unreflectedPayments;
+    const inCredit = adjustedAmountDue < 0;
+    const runwayMonths = inCredit ? Math.abs(adjustedAmountDue) / avgRecent : 0;
     const needsTopUp = !inCredit || runwayMonths < RUNWAY_WARN_MONTHS;
 
     // This Summary tab is a one-time build from Gmail PDFs, not a live sync — a new
     // invoice only appears here if someone re-runs the build script. A normal invoice
     // lag is about one month behind "now"; more than that means the sheet itself has
     // gone stale, and the runway figure below is computed from an old statement.
-    const [py, pm] = period.split('-').map(Number);
     const now = new Date();
     const monthsBehind = (now.getUTCFullYear() - py) * 12 + (now.getUTCMonth() + 1 - pm);
     const stale = monthsBehind > 2;
@@ -77,6 +94,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       period,
       amountDue: Math.round(amountDue * 100) / 100,
+      unreflectedPayments: Math.round(unreflectedPayments * 100) / 100,
+      adjustedAmountDue: Math.round(adjustedAmountDue * 100) / 100,
       avgRecent: Math.round(avgRecent),
       inCredit,
       runwayMonths: Math.round(runwayMonths * 10) / 10,
